@@ -1,0 +1,10 @@
+# Credentials: never commit
+apikey.json
+connect.py
+
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Captured views and meshes (large)
+data/

@@ -1,0 +1,172 @@
+"""Settings loaded from config.toml. Every value has a default, so the file only
+needs the entries that differ. Distances are millimeters in the world frame."""
+
+import tomllib
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from pathlib import Path
+
+
+@dataclass
+class MachineConfig:
+    address: str = "armfarm11-main.310sld03v2.viam.cloud"
+    credentials: str = "apikey.json"
+    arm: str = "arm"
+    camera: str = "cam"
+    gripper: str = "gripper"
+    motion: str = "builtin"
+
+
+@dataclass
+class WorkspaceConfig:
+    # Table region searched for objects.
+    x_range: list[float] = field(default_factory=lambda: [150.0, 650.0])
+    y_range: list[float] = field(default_factory=lambda: [-500.0, 180.0])
+    # Camera positions for the survey; the camera looks straight down from each.
+    survey_positions: list[list[float]] = field(default_factory=lambda: [[380.0, -150.0, 550.0]])
+    # Points closer than this (horizontally) to the arm base are the arm itself.
+    min_base_distance: float = 200.0
+    # Around each object, the measured table is added as an obstacle (this far
+    # below its surface, over a patch this wide), in case it sits higher than the
+    # table configured on the machine.
+    table_obstacle_margin: float = 3.0
+    table_patch_size: float = 300.0
+    # Points count toward objects from this height above the table; an object's
+    # top must reach `min_object_top`, which rejects sensor noise on the table.
+    min_object_height: float = 8.0
+    min_object_top: float = 20.0
+    max_object_height: float = 250.0
+    min_object_points: int = 100
+    cluster_distance: float = 10.0
+    table_distance: float = 4.0
+    max_table_tilt_deg: float = 10.0
+
+
+@dataclass
+class CameraConfig:
+    min_depth: float = 150.0
+    max_depth: float = 900.0
+
+
+@dataclass
+class ViewConfig:
+    # Distance from the camera to the nearest point of the object's bounding
+    # sphere. RealSense D4xx depth fails closer than about 260mm at 1280x720.
+    standoff: float = 280.0
+    elevations_deg: list[float] = field(default_factory=lambda: [25.0, 50.0, 72.0])
+    azimuth_step_deg: float = 30.0
+    include_top_view: bool = True
+    # Rolls about the optical axis to try when a view is not reachable as-is.
+    rolls_deg: list[float] = field(default_factory=lambda: [0.0, 180.0, 90.0, -90.0])
+    # A surface direction counts as seen when a camera lies within this angle of it.
+    coverage_angle_deg: float = 55.0
+    # Below this coverage the object is moved to a scan station first.
+    min_coverage: float = 0.85
+    object_margin: float = 15.0
+    # The camera aims this fraction of the way up the object.
+    aim_height_fraction: float = 0.4
+
+
+@dataclass
+class CaptureConfig:
+    # Wait after the arm stops so vibration settles and frames taken in motion are flushed.
+    settle_s: float = 0.6
+    # Frames per view; their per-pixel median suppresses depth noise.
+    frames_per_view: int = 5
+    frame_timeout_s: float = 10.0
+    move_timeout_s: float = 60.0
+
+
+@dataclass
+class RelocateConfig:
+    enabled: bool = True
+    # Candidate scan stations (x, y) with good reach all around. Checked in order.
+    stations: list[list[float]] = field(default_factory=lambda: [[380.0, -150.0], [330.0, -250.0], [430.0, -60.0]])
+    min_clearance: float = 40.0
+    max_grasp_width: float = 80.0
+    # How far the fingertips go below the object's top, capped at half its height.
+    grasp_depth: float = 25.0
+    # Distance from the gripper frame origin to the fingertip center, along the
+    # gripper's approach axis. Measure this on the real gripper.
+    fingertip_offset: float = 0.0
+    approach_height: float = 100.0
+    # The jaws are assumed to close along the gripper frame's y-axis; set this if
+    # they close along another direction (degrees about the approach axis).
+    jaw_axis_offset_deg: float = 0.0
+    return_after_scan: bool = True
+
+
+@dataclass
+class ReconstructConfig:
+    voxel: float = 1.5
+    sdf_trunc: float = 6.0
+    # A surface must be seen by about this many views to appear in the mesh.
+    min_view_weight: float = 2.0
+    # "auto" uses CUDA when Open3D was built with it, else "CPU:0".
+    device: str = "auto"
+    pixel_stride: int = 2
+    # Fusion keeps points within this margin around the object's box ...
+    crop_margin: float = 12.0
+    # ... and at least this far above the table.
+    table_clearance: float = 2.5
+    # Registration also uses a ring of table around the object to lock height and tilt.
+    context_margin: float = 10.0
+    registration_voxel: float = 2.0
+    # Joint ICP: correspondence distance (starts at twice this), iterations,
+    # robust (Huber) threshold, and how much of a view pair must overlap.
+    icp_max_distance: float = 3.0
+    icp_iterations: int = 25
+    huber_mm: float = 1.5
+    points_per_pair: int = 1500
+    min_pair_overlap: float = 0.2
+    max_pair_angle_deg: float = 60.0
+    # The arm's expected pose accuracy at the object, used as a prior: ICP
+    # corrections beyond this need strong evidence from the geometry.
+    prior_translation_mm: float = 3.0
+    prior_rotation_deg: float = 1.0
+    # Corrections larger than this are treated as registration failures.
+    max_correction_mm: float = 15.0
+    max_correction_deg: float = 5.0
+    smoothing_iterations: int = 5
+    min_component_fraction: float = 0.05
+
+
+@dataclass
+class Config:
+    machine: MachineConfig = field(default_factory=MachineConfig)
+    workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
+    camera: CameraConfig = field(default_factory=CameraConfig)
+    views: ViewConfig = field(default_factory=ViewConfig)
+    capture: CaptureConfig = field(default_factory=CaptureConfig)
+    relocate: RelocateConfig = field(default_factory=RelocateConfig)
+    reconstruct: ReconstructConfig = field(default_factory=ReconstructConfig)
+    data_dir: str = "data"
+    base_dir: Path = field(default=Path("."), repr=False)
+
+    def resolve(self, path: str) -> Path:
+        return (self.base_dir / path).resolve()
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data.pop("base_dir")
+        return data
+
+
+def _apply(target, values: dict, section: str) -> None:
+    known = {f.name: f for f in fields(target)}
+    for key, value in values.items():
+        if key not in known:
+            raise ValueError(f"Unknown setting '{section}{key}' in config")
+        current = getattr(target, key)
+        if is_dataclass(current):
+            _apply(current, value, f"{section}{key}.")
+        else:
+            setattr(target, key, value)
+
+
+def load_config(path: str | Path = "config.toml") -> Config:
+    path = Path(path)
+    config = Config(base_dir=path.parent.resolve())
+    if path.exists():
+        with path.open("rb") as file:
+            _apply(config, tomllib.load(file), "")
+    return config

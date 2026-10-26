@@ -1,0 +1,41 @@
+# Settings for this arm cell. Anything left out uses the defaults in
+# recon/config.py, where every setting is documented. Distances are mm, world frame.
+
+[machine]
+address = "armfarm14-main.310sld03v2.viam.cloud"
+credentials = "apikey.json"   # {"key": "...", "key_id": "..."}, kept out of git
+arm = "arm"
+camera = "cam"
+gripper = "gripper"
+motion = "builtin"
+
+[workspace]
+# Table region searched for objects, clear of the walls (front x=800, side y=425).
+x_range = [-350, 700]
+y_range = [-650, 350]
+# Overhead camera positions for the survey (the camera looks straight down).
+survey_positions = [[150, -400, 600], [350, -150, 600]]
+
+[views]
+standoff = 280               # camera to nearest point of the object
+elevations_deg = [25, 50, 72]
+azimuth_step_deg = 30
+min_coverage = 0.85          # below this, the object is moved to a scan station
+
+[capture]
+settle_s = 0.6               # pause after each move before taking frames
+frames_per_view = 5          # per-pixel median of this many frames
+
+[relocate]
+enabled = true
+# All 37 views plan at the first two on armfarm14 (planned 2026-10-26).
+stations = [[350, -250], [300, -350], [400, -150]]
+# Measure these on the real gripper before enabling relocation with --execute.
+max_grasp_width = 80
+fingertip_offset = 0
+jaw_axis_offset_deg = 0
+return_after_scan = true
+
+[reconstruct]
+voxel = 1.5
+device = "auto"              # CUDA when available

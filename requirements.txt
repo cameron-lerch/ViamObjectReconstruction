@@ -1,0 +1,5 @@
+viam-sdk>=0.85
+open3d>=0.20
+numpy>=2.0
+scipy>=1.13
+pytest>=8.0
