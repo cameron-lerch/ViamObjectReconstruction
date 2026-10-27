@@ -97,12 +97,12 @@ def progression_figure(name: str, title: str, folder: Path, counts: list[int], e
         observed = o3d.io.read_triangle_mesh(str(folder / f"views_{k:02d}" / "observed.ply"))
         row = rows[str(k)]
         sub = (f"{row.get('completeness', 0):.0%} seen, roughness {row['roughness_mm']:.2f}mm"
-               if row.get("roughness_mm") == row.get("roughness_mm") and row.get("roughness_mm") is not None else "nothing seen by 2+ views")
+               if row.get("roughness_mm") == row.get("roughness_mm") and row.get("roughness_mm") is not None else "nothing seen")
         panels.append((render(observed, PANEL, elevation, azimuth, center, radius), f"{k} view{'s' if k > 1 else ''}: observed", sub))
     cloud = np.asarray(o3d.io.read_triangle_mesh(str(folder / f"views_{last:02d}" / "observed.ply")).vertices)
     panels.append((render(color_measured(closed, cloud), PANEL, elevation, azimuth, center, radius, use_colors=True),
                    f"{last} views: closed", f"{rows[str(last)]['measured_share']:.0%} measured (orange = filled in)"))
-    figure(name, title, panels, "Observed meshes show only surface seen by at least 2 views; red lines mark open edges.")
+    figure(name, title, panels, "Observed meshes: 1 view keeps all it saw; 2+ views keep surface at least 2 of them agree on. Red lines mark open edges.")
 
 
 def measured_figure(folder: Path, counts: list[int], elevation: float, azimuth: float) -> None:
@@ -116,9 +116,9 @@ def measured_figure(folder: Path, counts: list[int], elevation: float, azimuth: 
             continue
         for el, az, side in ((elevation, azimuth, "side"), (-55, azimuth, "underside")):
             panels.append((render(color_measured(closed, observed), PANEL, el, az, center, radius, use_colors=True, wire_boundary=False),
-                           f"{k} views, {side}", f"{rows[str(k)]['measured_share']:.0%} measured, {rows[str(k)]['volume_cm3']:.1f}cm³"))
+                           f"{k} view{'s' if k > 1 else ''}, {side}", f"{rows[str(k)]['measured_share']:.0%} measured, {rows[str(k)]['volume_cm3']:.1f}cm³"))
     figure("measured_vs_filled", "Closed meshes: measured surface (gray-blue) vs. filled in (orange)", panels,
-           "The flat bottom is always filled in; with few views, so are the walls (straight down from the outline seen from above).")
+           "The flat bottom is always filled in; with few views, so are most walls (straight down from the outline seen from above).")
 
 
 def calibration_figure(session: Session, object_id: int) -> None:
@@ -162,17 +162,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--real", default="data/20261026-143006")
     parser.add_argument("--real-object", type=int, default=1)
-    parser.add_argument("--synthetic", default="data/demo-20261027-104511")
+    parser.add_argument("--synthetic", default="data/demo-20261027-113147")
     parser.add_argument("--old-synthetic", default="data/demo-20261026-130458", help="a demo built with the first alignment approach")
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     real = Session(ROOT / args.real)
     real_folder = real.recon_dir(args.real_object) / "progression"
-    progression_figure("progression_real", "Real cylinder: one view vs. many", real_folder, [2, 5, 12, 25], 20, -60)
-    measured_figure(real_folder, [3, 8, 25], 20, -60)
+    progression_figure("progression_real", "Real cylinder: one view vs. many", real_folder, [1, 3, 8, 25], 20, -60)
+    measured_figure(real_folder, [1, 8, 25], 20, -60)
     synthetic = Session(ROOT / args.synthetic)
     progression_figure("progression_synthetic", "Synthetic cylinder (known shape): one view vs. many",
-                       synthetic.recon_dir(1) / "progression", [2, 4, 8, 37], 20, -60)
+                       synthetic.recon_dir(1) / "progression", [1, 3, 8, 37], 20, -60)
     calibration_figure(real, args.real_object)
     alignment_figure(Session(ROOT / args.old_synthetic))
 

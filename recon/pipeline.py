@@ -7,6 +7,7 @@ import logging
 
 import numpy as np
 
+from .board import BoardSpec, depth_model, detect, hand_eye, locate_flat
 from .calibrate import MountCalibration, apply_mount, calibrate_mount
 from .config import Config
 from .planner import ScanPlan, plan_scan
@@ -21,6 +22,7 @@ from .transforms import look_at
 log = logging.getLogger(__name__)
 
 CALIBRATION_FILE = "mount_calibration.json"
+MAX_BOARD_TILT_DEG = 3.0
 
 
 async def capture_view(robot: Robot, folder, extra: dict | None = None):
@@ -223,4 +225,77 @@ def reconstruct_object(session: Session, object_id: int, plane: TablePlane, conf
     deviation = result.report["median_single_view_deviation_mm"]
     log.info("  mesh: %d triangles; single views deviate %.2fmm (median) from it -> %s",
              result.report["mesh"]["triangles"], deviation or float("nan"), session.recon_dir(object_id))
+    return result
+
+
+async def board_calibration(robot: Robot, session: Session, config: Config, execute: bool,
+                            spec: BoardSpec | None = None) -> dict | None:
+    """Hand-eye calibration and a depth check with a ChArUco board lying on the table.
+
+    Finds the board from where the camera is now, plans views of it from several
+    distances and directions (plan-only), and with `execute` captures them and
+    solves for the camera mount and the depth sensor's error.
+    """
+    spec = spec or BoardSpec()
+    located = await capture_view(robot, session.root / "board" / "located", {"frames": 3})
+    view = load_view(located)
+    found = detect(view, spec)
+    if found is None:
+        raise RuntimeError("The board isn't in view; move the camera so part of it is visible and try again")
+    # The mat lies on the table, so it must look level. If it doesn't, the camera's
+    # frame in the machine config is wrong, and every planned view would miss it.
+    normal = (view.T_world_cam @ found.T_cam_board)[:3, 2]
+    tilt = float(np.degrees(np.arccos(min(1.0, abs(normal[2])))))
+    if tilt > MAX_BOARD_TILT_DEG:
+        raise RuntimeError(f"The board looks {tilt:.1f}deg from level through the configured camera frame; "
+                           "fix the camera frame in the machine config (see scan.py calibrate) before calibrating")
+    T_world_board = locate_flat(view, found, spec)
+    center = (T_world_board @ np.append(spec.center, 1.0))[:3]
+    log.info("Board found (%d corners, %.2fpx, %.1fdeg from level); its center is at (%.0f, %.0f, %.0f)",
+             len(found.ids), found.reprojection_px, tilt, *center)
+
+    camera = config.machine.camera
+    poses = []
+    for distance in (300.0, 380.0, 460.0):
+        for elevation in (62.0, 75.0, 88.0):
+            for azimuth in range(0, 360, 60):
+                a, e = np.radians(azimuth + elevation), np.radians(elevation)  # stagger azimuths per ring
+                eye = center + distance * np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)])
+                poses.append(lambda roll, eye=eye: look_at(eye, center, roll))
+    reachable = []
+    for pose_for_roll in poses:
+        _, pose, _ = await robot.plan_best_roll(camera, pose_for_roll)
+        if pose is not None:
+            reachable.append(pose)
+    # Spread the chosen views out: farthest-first over camera position and viewing direction.
+    chosen = [reachable[0]] if reachable else []
+    while reachable and len(chosen) < min(config.board.views, len(reachable)):
+        score = [min(np.linalg.norm(p[:3, 3] - c[:3, 3]) / 100 + (1 - p[:3, 2] @ c[:3, 2]) * 5 for c in chosen)
+                 for p in reachable]
+        chosen.append(reachable[int(np.argmax(score))])
+    log.info("%d of %d board views are reachable; using %d", len(reachable), len(poses), len(chosen))
+    if not execute:
+        log.info("Planning only. Add --execute to capture the board views.")
+        return None
+
+    mount = await robot.camera_mount()
+    views, found_views, ends = [], [], []
+    for index, pose in enumerate(chosen):
+        await robot.move(camera, pose)
+        folder = await capture_view(robot, session.root / "board" / f"view_{index:03d}", {"frames": 3})
+        board_view = load_view(folder)
+        found = detect(board_view, spec)
+        if found is None:
+            log.warning("  view %d: board not found; skipped", index)
+            continue
+        views.append(board_view)
+        found_views.append(found)
+        ends.append(board_view.T_world_cam @ np.linalg.inv(mount))
+        log.info("  view %d/%d: %d corners, %.2fpx", index + 1, len(chosen), len(found.ids), found.reprojection_px)
+    if len(found_views) < 5:
+        raise RuntimeError(f"Only {len(found_views)} usable board views")
+    calibrated, T_world_board, diagnostics = hand_eye(ends, found_views, views[0].intrinsics.matrix, mount)
+    result = {"original_mount": mount.tolist(), "board_mount": calibrated.tolist(), "board_pose": T_world_board.tolist(),
+              "hand_eye": diagnostics, "depth": depth_model(views, found_views)}
+    session.write_json(session.root / "board" / "board_calibration.json", result)
     return result

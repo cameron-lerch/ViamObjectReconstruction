@@ -17,10 +17,10 @@ and only the number of views changes. For each k this writes a closed mesh
   data, as opposed to the flat-bottom and straight-wall fill.
 - volume of the closed mesh.
 
-Every subset uses the pipeline's own "seen by at least N views" filter, so with
-fewer views than N the mesh is empty, and with few views it covers only where
-they overlap. That is the point: one viewpoint cannot separate surface from
-noise.
+Each subset keeps surface seen by at least min(N, k) of its k views, where N is
+the pipeline's setting (2): one view keeps everything it saw, so the 1-view
+mesh is the best a single view can give, and 2 or more views keep only
+surface that at least 2 of them agree on.
 - error against the true shape, when ground truth is given (synthetic data),
   after the best rigid fit, so it measures shape rather than placement.
 
@@ -119,9 +119,7 @@ def measured_share(mesh: o3d.geometry.TriangleMesh, measured: np.ndarray) -> flo
 def progression(views: list[View], obj: DetectedObject, plane: TablePlane, config: Config, folder: Path,
                 counts: list[int] | None = None, order: str = "spread", refine: bool = True,
                 truth: o3d.geometry.TriangleMesh | None = None, min_views: int | None = None) -> list[dict]:
-    """`min_views` defaults to the pipeline's own setting, so with fewer views than
-    that the mesh is empty: one view cannot pass a "seen by at least 2 views" filter."""
-    min_views = config.reconstruct.min_views if min_views is None else min_views
+    """`min_views` overrides the "seen by at least min(N, k) views" rule for every subset."""
     folder = Path(folder)
     log.info("Aligning all %d views once", len(views))
     obj, poses, planes, _ = refined_views(views, obj, plane, config, refine)
@@ -146,7 +144,7 @@ def progression(views: list[View], obj: DetectedObject, plane: TablePlane, confi
     for k in counts:
         chosen = sequence[:k]
         fused = build_mesh([posed[i] for i in chosen], [poses[i] for i in chosen], [planes[i] for i in chosen],
-                           obj, config, min_views=min_views)
+                           obj, config, min_views=min(config.reconstruct.min_views, k) if min_views is None else min_views)
         out = folder / f"views_{k:02d}"
         out.mkdir(parents=True, exist_ok=True)
         write_meshes(out, fused.mesh, fused.observed)

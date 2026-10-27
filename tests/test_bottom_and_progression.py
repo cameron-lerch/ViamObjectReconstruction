@@ -55,8 +55,10 @@ def test_progression_improves_with_more_views(tmp_path):
     rows = progression(views, obj, plane, config, tmp_path, counts=[1, 3, len(views)], truth=scene.objects[0].mesh)
     raw, one, three, everything = rows
     assert raw["views"] == "raw" and everything["views"] == len(views)
-    # One view cannot pass "seen by at least 2 views": nothing survives.
-    assert one["observed_triangles"] == 0 and one.get("volume_cm3") is None
+    # The best single-view mesh: everything one view saw, closed with the priors.
+    assert one["observed_triangles"] > 0 and one["volume_cm3"] is not None
+    assert everything["closed_truth_median_mm"] < one["closed_truth_median_mm"]
+    assert one["measured_share"] < three["measured_share"] < everything["measured_share"]
     assert everything["roughness_mm"] < 0.5 * raw["roughness_mm"]
     assert everything["closed_truth_median_mm"] < three["closed_truth_median_mm"]
     assert everything["completeness"] == pytest.approx(1.0, abs=0.02) and three["completeness"] < 0.7

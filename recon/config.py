@@ -152,6 +152,12 @@ class ReconstructConfig:
 
 
 @dataclass
+class BoardConfig:
+    # Views captured by `scan.py calibrate-board`.
+    views: int = 16
+
+
+@dataclass
 class Config:
     machine: MachineConfig = field(default_factory=MachineConfig)
     workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
@@ -160,6 +166,7 @@ class Config:
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     relocate: RelocateConfig = field(default_factory=RelocateConfig)
     reconstruct: ReconstructConfig = field(default_factory=ReconstructConfig)
+    board: BoardConfig = field(default_factory=BoardConfig)
     data_dir: str = "data"
     base_dir: Path = field(default=Path("."), repr=False)
 

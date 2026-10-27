@@ -8,6 +8,7 @@ from wherever the arm is now.
     python scan.py scan --execute --step  # the full run, confirming each object
     python scan.py scan --execute --confirm-moves --reuse-survey --objects 2 --max-views 3
     python scan.py calibrate --objects 1  # estimate the camera mount from a scanned object
+    python scan.py calibrate-board        # ChArUco board: plan views (add --execute to capture and solve)
     python scan.py reconstruct            # rebuild meshes from the latest session's saved views
     python scan.py progression --objects 1  # meshes and metrics from 1, 2, ... n views
     python scan.py demo                   # the whole pipeline on synthetic data, no robot needed
@@ -19,6 +20,7 @@ import logging
 import time
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from recon import pipeline, synthetic
 from recon.config import Config, load_config
@@ -60,6 +62,12 @@ async def run_robot(args, config: Config) -> None:
 
 
 async def run_steps(robot: Robot, args, config: Config) -> None:
+    if args.command == "calibrate-board":
+        session = Session.create(config.resolve(config.data_dir), "board-" + time.strftime("%Y%m%d-%H%M%S"))
+        result = await pipeline.board_calibration(robot, session, config, args.execute)
+        if result:
+            report_board(result, session)
+        return
     reuse = (args.command == "plan" and not args.new_survey) or (args.command == "scan" and args.reuse_survey)
     if reuse:
         session = Session.latest(config.resolve(config.data_dir))
@@ -84,6 +92,31 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
         log.info("Planning only. Add --execute to move the arm (and --step to confirm each object).")
 
 
+def viam_frame(mount: np.ndarray) -> str:
+    o_x, o_y, o_z, theta = matrix_to_ov(mount[:3, :3])
+    x, y, z = mount[:3, 3]
+    return ('  "translation": {"x": %.2f, "y": %.2f, "z": %.2f},\n'
+            '  "orientation": {"type": "ov_degrees", "value": {"x": %.5f, "y": %.5f, "z": %.5f, "th": %.3f}}'
+            % (x, y, z, o_x, o_y, o_z, theta))
+
+
+def report_board(result: dict, session: Session) -> None:
+    original, board = np.array(result["original_mount"]), np.array(result["board_mount"])
+    change = np.linalg.inv(original) @ board
+    eye = result["hand_eye"]
+    log.info("Hand-eye from %d views (%d corners): reprojection %.2f -> %.2fpx", eye["views"], eye["corners"],
+             eye["reprojection_rms_px_before"], eye["reprojection_rms_px_after"])
+    log.info("Board-calibrated mount differs from the configured one by %.1fmm / %.2fdeg:\n%s",
+             np.linalg.norm(change[:3, 3]), np.degrees(np.linalg.norm(Rotation.from_matrix(change[:3, :3]).as_rotvec())),
+             viam_frame(board))
+    depth = result["depth"]
+    if depth:
+        log.info("Depth vs. board over %d corners at %.0f-%.0fmm: median error %+.2fmm; fit %+.2fmm %+.2f%% of distance (rms %.2fmm)",
+                 depth["corners"], *depth["distance_range_mm"], depth["median_error_mm"], depth["offset_mm"],
+                 depth["scale_percent"], depth["fit_rms_mm"])
+    log.info("Saved to %s", session.root / "board" / "board_calibration.json")
+
+
 def run_calibrate(args, config: Config) -> None:
     """Estimate the camera mount from a scanned object and print it in Viam's frame format."""
     session = Session(args.session) if args.session else Session.latest(config.resolve(config.data_dir))
@@ -91,13 +124,9 @@ def run_calibrate(args, config: Config) -> None:
         raise SystemExit("calibrate needs one scanned object: --objects N (a scan of 20+ views works best)")
     calibration = pipeline.calibrate_session(session, args.objects[0], config)
     log.info("%s", calibration.describe())
-    translation = calibration.mount[:3, 3]
-    o_x, o_y, o_z, theta = matrix_to_ov(calibration.mount[:3, :3])
     log.info("Saved to %s; reconstructions of this session now use it.", session.root / pipeline.CALIBRATION_FILE)
-    log.info("To use it for future captures, set the camera's frame (parent: arm) in the Viam app to:\n"
-             '  "translation": {"x": %.2f, "y": %.2f, "z": %.2f},\n'
-             '  "orientation": {"type": "ov_degrees", "value": {"x": %.5f, "y": %.5f, "z": %.5f, "th": %.3f}}',
-             *translation, o_x, o_y, o_z, theta)
+    log.info("To use it for future captures, set the camera's frame (parent: arm) in the Viam app to:\n%s",
+             viam_frame(calibration.mount))
 
 
 def run_reconstruct(args, config: Config) -> None:
@@ -172,7 +201,7 @@ def run_demo(config: Config, with_progression: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["survey", "plan", "scan", "calibrate", "reconstruct", "progression", "demo"])
+    parser.add_argument("command", choices=["survey", "plan", "scan", "calibrate", "calibrate-board", "reconstruct", "progression", "demo"])
     parser.add_argument("--config", default="config.toml")
     parser.add_argument("--execute", action="store_true", help="allow the arm to move")
     parser.add_argument("--step", action="store_true", help="confirm before each object and each relocation")
@@ -191,7 +220,7 @@ def main() -> None:
                         help="progression: add views most-different-first (spread) or in capture order")
     parser.add_argument("--progression", action="store_true", help="demo: also build the 1..n view progression")
     parser.add_argument("--min-views", type=int,
-                        help="progression: keep surfaces seen by at least this many views (default: the config's, 2)")
+                        help="progression: keep surfaces seen by at least this many views (default: min(2, number of views))")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 

@@ -3,3 +3,5 @@ open3d>=0.20
 numpy>=2.0
 scipy>=1.13
 pytest>=8.0
+opencv-contrib-python-headless>=5.0  # ChArUco board detection
+# Optional: cairosvg (PNG copies of the README figures)
