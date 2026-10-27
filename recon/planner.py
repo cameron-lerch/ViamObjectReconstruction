@@ -15,6 +15,7 @@ class PlannedView:
     candidate: ViewCandidate
     roll_deg: float
     T_world_cam: np.ndarray
+    joints_deg: np.ndarray  # planned end joints, from planning the view on its own
 
 
 @dataclass
@@ -33,34 +34,30 @@ class ScanPlan:
             "object": self.obj.to_dict(),
             "coverage": self.coverage,
             "views": [{"azimuth_deg": v.candidate.azimuth_deg, "elevation_deg": v.candidate.elevation_deg,
-                       "roll_deg": v.roll_deg, "T_world_cam": v.T_world_cam.tolist()} for v in self.views],
+                       "roll_deg": v.roll_deg, "joints_deg": v.joints_deg.tolist(),
+                       "T_world_cam": v.T_world_cam.tolist()} for v in self.views],
             "unreachable": [{"azimuth_deg": c.azimuth_deg, "elevation_deg": c.elevation_deg, "reason": reason}
                             for c, reason in self.unreachable],
         }
 
 
 async def plan_scan(robot: Robot, obj: DetectedObject, others: list[DetectedObject], config: Config) -> ScanPlan:
-    """Check every candidate view with the motion planner, trying each camera roll until one works.
+    """Check every candidate view with the motion planner, in travel order.
 
-    The scanned object and all other detected objects are obstacles, so plans
-    never put the gripper or camera through them.
+    Each view uses the camera roll whose joints are closest to the previous
+    view's, so the wrist does not wind up over a ring. The scanned object and
+    all other detected objects are obstacles, so plans never put the gripper
+    or camera through them.
     """
     world_state = robot.world_state([obj, *others], config.views.object_margin)
     plan = ScanPlan(obj)
+    previous = None
     for candidate in order_for_travel(generate_candidates(obj, config.views)):
-        reasons = []
-        for roll in config.views.rolls_deg:
-            pose = candidate.pose(roll)
-            trajectory, reason = await robot.plan(config.machine.camera, pose, world_state)
-            if trajectory is not None:
-                plan.views.append(PlannedView(candidate, roll, pose))
-                break
-            reasons.append(reason)
-        else:
-            plan.unreachable.append((candidate, most_common(reasons)))
+        roll, pose, result = await robot.plan_best_roll(config.machine.camera, candidate.pose, world_state, previous)
+        if pose is None:
+            plan.unreachable.append((candidate, result))
+            continue
+        plan.views.append(PlannedView(candidate, roll, pose, result))
+        previous = result
     plan.coverage = coverage(aim_point(obj, config.views), [v.candidate.eye for v in plan.views], config.views)
     return plan
-
-
-def most_common(reasons: list[str]) -> str:
-    return max(set(reasons), key=reasons.count) if reasons else ""

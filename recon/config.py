@@ -57,6 +57,8 @@ class ViewConfig:
     include_top_view: bool = True
     # Rolls about the optical axis to try when a view is not reachable as-is.
     rolls_deg: list[float] = field(default_factory=lambda: [0.0, 180.0, 90.0, -90.0])
+    # Keep the last (wrist) joint within this many degrees of zero, so the camera cable doesn't wind up.
+    max_wrist_deg: float = 200.0
     # A surface direction counts as seen when a camera lies within this angle of it.
     coverage_angle_deg: float = 55.0
     # Below this coverage the object is moved to a scan station first.
@@ -72,6 +74,7 @@ class CaptureConfig:
     settle_s: float = 0.6
     # Frames per view; their per-pixel median suppresses depth noise.
     frames_per_view: int = 5
+    # Allowed time per frame.
     frame_timeout_s: float = 10.0
     move_timeout_s: float = 60.0
 
@@ -99,8 +102,8 @@ class RelocateConfig:
 class ReconstructConfig:
     voxel: float = 1.5
     sdf_trunc: float = 6.0
-    # A surface must be seen by about this many views to appear in the mesh.
-    min_view_weight: float = 2.0
+    # A surface must be seen by at least this many views to appear in the mesh.
+    min_views: int = 2
     # "auto" uses CUDA when Open3D was built with it, else "CPU:0".
     device: str = "auto"
     pixel_stride: int = 2
@@ -108,6 +111,11 @@ class ReconstructConfig:
     crop_margin: float = 12.0
     # ... and at least this far above the table.
     table_clearance: float = 2.5
+    # Before fusing, the object's box is refit from the scan's own points found within
+    # this far of the survey's box (the survey can be off by more than crop_margin).
+    refit_search: float = 40.0
+    # Width of the ring of table around the object used to fit the table per view.
+    table_ring: float = 30.0
     # Registration also uses a ring of table around the object to lock height and tilt.
     context_margin: float = 10.0
     registration_voxel: float = 2.0
@@ -123,10 +131,23 @@ class ReconstructConfig:
     # corrections beyond this need strong evidence from the geometry.
     prior_translation_mm: float = 3.0
     prior_rotation_deg: float = 1.0
+    # Spin about the vertical axis: unobservable for round objects, so held tighter.
+    prior_spin_deg: float = 0.3
     # Corrections larger than this are treated as registration failures.
     max_correction_mm: float = 15.0
     max_correction_deg: float = 5.0
     smoothing_iterations: int = 5
+    # Objects rest flat on the table, so the final mesh is closed with a flat bottom,
+    # and walls never seen are assumed to drop straight down from the outline seen
+    # from above (screened Poisson; see bottom.py). The outline is shrunk by
+    # footprint_shrink mm because edge noise pads it.
+    close_bottom: bool = True
+    poisson_depth: int = 9
+    poisson_scale: float = 3.0
+    footprint_shrink: float = 1.0
+    # Wall-meets-table pixels flare outward; this lowest band of observed surface (mm)
+    # is replaced by the straight-wall prior.
+    base_band: float = 5.0
     min_component_fraction: float = 0.05
 
 

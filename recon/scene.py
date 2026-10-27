@@ -175,3 +175,20 @@ def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceCo
             n_points=len(cluster),
         ))
     return objects
+
+
+def merge_views(detections: list[tuple[np.ndarray, list[DetectedObject]]], gap: float = 15.0) -> list[DetectedObject]:
+    """Combine per-view detections: each object comes from the view that sees it
+    closest to straight below the camera, where it is least distorted.
+
+    `detections` holds (camera xy, objects found in that view). A detection whose
+    center lies within another, better-seen object's footprint (plus `gap`) is
+    the same object, or a fragment of it.
+    """
+    ranked = sorted(((np.linalg.norm(obj.center[:2] - camera_xy), obj)
+                     for camera_xy, objects in detections for obj in objects), key=lambda item: item[0])
+    kept: list[DetectedObject] = []
+    for _, obj in ranked:
+        if all(np.linalg.norm(obj.center[:2] - other.center[:2]) > other.footprint_radius + gap for other in kept):
+            kept.append(obj)
+    return [DetectedObject(index, o.center, o.size, o.yaw_deg, o.n_points) for index, o in enumerate(kept)]

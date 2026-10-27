@@ -6,7 +6,7 @@ from recon import synthetic
 from recon.config import Config, load_config
 from recon.relocate import grasp_options
 from recon.rgbd import back_project
-from recon.scene import DetectedObject, detect_objects, fit_table_plane, merge_fragments, min_area_rectangle
+from recon.scene import DetectedObject, detect_objects, fit_table_plane, merge_fragments, merge_views, min_area_rectangle
 from recon.transforms import look_at
 from recon.views import aim_point, coverage, generate_candidates, order_for_travel
 
@@ -56,6 +56,18 @@ def test_overlapping_fragments_merge_and_separate_objects_do_not():
     body, sliver, other = lift(grid * 4), lift(grid[:20] * 2 + [5, 5]), lift(grid * 4 + [100, 0])
     merged = merge_fragments([body, other, sliver])
     assert sorted(len(c) for c in merged) == [100, 120]
+
+
+def test_merge_views_keeps_the_most_centered_detection():
+    def obj(x, y, size):
+        return DetectedObject(0, np.array([x, y, 30.0]), np.array([size, size, 60.0]), 0.0, 100)
+    near_camera_a = obj(100, 0, 40)
+    same_from_b = obj(112, 8, 70)  # seen obliquely from b: shifted and inflated
+    only_in_b = obj(400, 0, 40)
+    merged = merge_views([(np.array([100.0, 0]), [near_camera_a]), (np.array([400.0, 0]), [same_from_b, only_in_b])])
+    assert len(merged) == 2
+    assert merged[0].size[0] == 40 and merged[0].center[0] in (100, 400)
+    assert {m.id for m in merged} == {0, 1}
 
 
 def make_object():

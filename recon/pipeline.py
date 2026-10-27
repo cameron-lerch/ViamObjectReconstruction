@@ -7,17 +7,20 @@ import logging
 
 import numpy as np
 
+from .calibrate import MountCalibration, apply_mount, calibrate_mount
 from .config import Config
 from .planner import ScanPlan, plan_scan
 from .reconstruct import reconstruct, save_reconstruction
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
 from .rgbd import back_project, load_view, load_views, save_view
 from .robot import Robot
-from .scene import DetectedObject, TablePlane, detect_objects, fit_table_plane
+from .scene import DetectedObject, TablePlane, detect_objects, fit_table_plane, merge_views
 from .session import Session
 from .transforms import look_at
 
 log = logging.getLogger(__name__)
+
+CALIBRATION_FILE = "mount_calibration.json"
 
 
 async def capture_view(robot: Robot, folder, extra: dict | None = None):
@@ -27,15 +30,13 @@ async def capture_view(robot: Robot, folder, extra: dict | None = None):
 
 
 async def move_camera_looking_down(robot: Robot, x: float, y: float, z: float, world_state=None) -> bool:
-    reason = ""
-    for roll in robot.config.views.rolls_deg:
-        pose = look_at([x, y, z], [x, y, z - 100], roll)
-        trajectory, reason = await robot.plan(robot.config.machine.camera, pose, world_state)
-        if trajectory is not None:
-            await robot.move(robot.config.machine.camera, pose, world_state)
-            return True
-    log.warning("Cannot reach overhead view at (%.0f, %.0f, %.0f): %s", x, y, z, reason)
-    return False
+    camera = robot.config.machine.camera
+    roll, pose, reason = await robot.plan_best_roll(camera, lambda r: look_at([x, y, z], [x, y, z - 100], r), world_state)
+    if pose is None:
+        log.warning("Cannot reach overhead view at (%.0f, %.0f, %.0f): %s", x, y, z, reason)
+        return False
+    await robot.move(camera, pose, world_state)
+    return True
 
 
 def scene_points(folders, config: Config) -> np.ndarray:
@@ -57,9 +58,19 @@ async def survey(robot: Robot, session: Session, config: Config, execute: bool) 
     if not folders:
         raise RuntimeError("No survey views captured")
 
-    points = scene_points(folders, config)
-    plane = fit_table_plane(points, config.workspace)
-    objects = detect_objects(points, plane, config.workspace)
+    # Detect in each view on its own: with camera calibration error, the views
+    # disagree by several millimeters, and merging their clouds smears objects.
+    detections, planes = [], []
+    for folder in folders:
+        points = scene_points([folder], config)
+        view_plane = fit_table_plane(points, config.workspace)
+        camera_xy = load_view(folder).camera_position[:2]
+        detections.append((camera_xy, detect_objects(points, view_plane, config.workspace)))
+        planes.append(view_plane)
+    objects = merge_views(detections)
+    # Keep the table as seen by the camera closest to the objects.
+    middle = np.mean([obj.center[:2] for obj in objects], axis=0) if objects else detections[0][0]
+    plane = planes[int(np.argmin([np.linalg.norm(camera_xy - middle) for camera_xy, _ in detections]))]
     session.save_scene(objects, plane)
     robot.set_measured_table(plane)
     session.update(intrinsics=(await robot.intrinsics()).__dict__, config=config.to_dict())
@@ -122,7 +133,8 @@ def save_plan(session: Session, obj: DetectedObject, plan: ScanPlan, job: PickAn
 
 
 async def scan_object(robot: Robot, session: Session, obj: DetectedObject, others: list[DetectedObject],
-                      plane: TablePlane, config: Config, execute: bool, step: bool) -> None:
+                      plane: TablePlane, config: Config, execute: bool, step: bool,
+                      max_views: int | None = None) -> None:
     plan, job, station_plan = await plan_object(robot, obj, others, config)
     save_plan(session, obj, plan, job, station_plan)
     if not execute:
@@ -142,7 +154,8 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
     session.write_json(session.object_dir(obj.id) / "scanned_object.json", target.to_dict())
 
     world_state = robot.world_state([target, *others], config.views.object_margin)
-    for index, view in enumerate(plan.views):
+    # Views run top first, then ring by ring downward, so a limited run keeps to the high views.
+    for index, view in enumerate(plan.views[:max_views]):
         try:
             await robot.move(config.machine.camera, view.T_world_cam, world_state)
         except Exception as error:  # the planner can still fail on a path it approved from elsewhere
@@ -151,7 +164,7 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
         await capture_view(robot, session.views_dir(obj.id) / f"view_{index:03d}", {
             "azimuth_deg": view.candidate.azimuth_deg, "elevation_deg": view.candidate.elevation_deg,
             "roll_deg": view.roll_deg, "commanded_T_world_cam": view.T_world_cam.tolist()})
-        log.info("  captured view %d/%d (%s)", index + 1, len(plan.views), view.candidate.describe())
+        log.info("  captured view %d/%d (%s)", index + 1, len(plan.views[:max_views]), view.candidate.describe())
 
     if job is not None and config.relocate.return_after_scan:
         back = await plan_pick_and_place(robot, target, obj, others, config)
@@ -163,12 +176,47 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
     reconstruct_object(session, obj.id, plane, config)
 
 
-def reconstruct_object(session: Session, object_id: int, plane: TablePlane, config: Config, refine: bool = True):
+def scanned_object(session: Session, object_id: int) -> DetectedObject:
+    """The object as it was when scanned (it may have been moved to a station)."""
     objects, _ = session.load_scene()
     scanned = session.object_dir(object_id) / "scanned_object.json"
-    obj = (DetectedObject.from_dict(json.loads(scanned.read_text())) if scanned.exists()
-           else next(o for o in objects if o.id == object_id))
+    return (DetectedObject.from_dict(json.loads(scanned.read_text())) if scanned.exists()
+            else next(o for o in objects if o.id == object_id))
+
+
+def calibrate_session(session: Session, object_id: int, config: Config) -> MountCalibration:
+    """Estimate the camera mount from one object's views and save it with the session."""
     views = load_views(session.views_dir(object_id))
+    mounts = {json.dumps(v.meta["camera_mount"]) for v in views if "camera_mount" in v.meta}
+    if len(mounts) > 1:
+        raise ValueError("Views were captured with different camera mounts")
+    if not mounts:
+        raise ValueError("Views do not record the camera mount they were captured with")
+    original = np.array(json.loads(mounts.pop()))
+    calibration = calibrate_mount(views, original, scanned_object(session, object_id), config)
+    session.write_json(session.root / CALIBRATION_FILE, {
+        "from_object": object_id, "original": original.tolist(), "calibrated": calibration.mount.tolist(),
+        "rms_before_mm": calibration.rms_before_mm, "rms_after_mm": calibration.rms_after_mm})
+    return calibration
+
+
+def apply_session_calibration(session: Session, views: list) -> list:
+    """Recompute camera poses with the session's calibrated mount, when there is one."""
+    path = session.root / CALIBRATION_FILE
+    if not path.exists():
+        return views
+    calibration = json.loads(path.read_text())
+    original, calibrated = np.array(calibration["original"]), np.array(calibration["calibrated"])
+    for view in views:
+        if "camera_mount" in view.meta and not np.allclose(view.meta["camera_mount"], original):
+            raise ValueError(f"{view.name} was captured with a different mount than the calibration assumes")
+    log.info("  using the calibrated camera mount from %s", path.name)
+    return apply_mount(views, original, calibrated)
+
+
+def reconstruct_object(session: Session, object_id: int, plane: TablePlane, config: Config, refine: bool = True):
+    obj = scanned_object(session, object_id)
+    views = apply_session_calibration(session, load_views(session.views_dir(object_id)))
     log.info("Reconstructing object %d from %d views", object_id, len(views))
     result = reconstruct(views, obj, plane, config, refine)
     save_reconstruction(result, session.recon_dir(object_id))

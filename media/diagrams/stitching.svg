@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="600" viewBox="0 0 1320 600" font-family="Liberation Sans, Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4A5568"/>
+    </marker>
+    <style>
+      .title { font-size: 26px; font-weight: 700; fill: #1F2933; }
+      .name { font-size: 16px; font-weight: 700; fill: #1F2933; }
+      .desc { font-size: 13px; fill: #52606D; }
+      .math { font-size: 15px; fill: #1F2933; font-family: "Liberation Serif", "Times New Roman", serif; font-style: italic; }
+      .lane { font-size: 14px; font-weight: 700; fill: #616E7C; letter-spacing: 0.5px; }
+      .edge { stroke: #4A5568; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect x="0" y="0" width="1320" height="600" rx="16" fill="#FFFFFF"/>
+  <text x="660" y="40" text-anchor="middle" class="title">Stitching: how each depth pixel lands in the world, and which step fixes which error</text>
+
+  <text x="40" y="84" class="lane">ONE DEPTH PIXEL → WORLD POINT</text>
+  <rect x="40" y="98" width="190" height="96" rx="12" fill="#F0F4F8" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="135" y="126" text-anchor="middle" class="name">pixel (u, v), depth d</text>
+  <text x="135" y="150" text-anchor="middle" class="desc">median of 5 frames,</text>
+  <text x="135" y="168" text-anchor="middle" class="desc">edge pixels dropped</text>
+
+  <rect x="270" y="98" width="190" height="96" rx="12" fill="#F0F4F8" stroke="#9FB3C8" stroke-width="1.5"/>
+  <text x="365" y="126" text-anchor="middle" class="name">camera frame p</text>
+  <text x="365" y="150" text-anchor="middle" class="math">x = (u − cx)·d / fx</text>
+  <text x="365" y="172" text-anchor="middle" class="math">y = (v − cy)·d / fy,   z = d</text>
+
+  <rect x="500" y="98" width="560" height="96" rx="12" fill="#FFFFFF" stroke="#4A5568" stroke-width="1.5"/>
+  <text x="780" y="126" text-anchor="middle" class="name">world point = C · T(world ← arm end, joints) · M(arm end ← camera) · p</text>
+  <text x="608" y="156" text-anchor="middle" class="desc">C: per-view correction</text>
+  <text x="608" y="174" text-anchor="middle" class="desc">(step 6, ~1mm)</text>
+  <text x="780" y="156" text-anchor="middle" class="desc">T: arm kinematics</text>
+  <text x="780" y="174" text-anchor="middle" class="desc">(xArm6, ~0.1mm repeatable)</text>
+  <text x="958" y="156" text-anchor="middle" class="desc">M: camera mount</text>
+  <text x="958" y="174" text-anchor="middle" class="desc">(step 5, was 21mm off)</text>
+
+  <rect x="1100" y="98" width="180" height="96" rx="12" fill="#F2FAF4" stroke="#9CCFAE" stroke-width="1.5"/>
+  <text x="1190" y="126" text-anchor="middle" class="name">into the TSDF</text>
+  <text x="1190" y="150" text-anchor="middle" class="desc">if inside the object's</text>
+  <text x="1190" y="168" text-anchor="middle" class="desc">box and above the table</text>
+
+  <path d="M230,146 L266,146" class="edge"/>
+  <path d="M460,146 L496,146" class="edge"/>
+  <path d="M1060,146 L1096,146" class="edge"/>
+
+  <text x="40" y="250" class="lane">THREE KINDS OF ERROR, THREE FIXES</text>
+
+  <rect x="40" y="266" width="400" height="300" rx="12" fill="#FFF5F5" stroke="#E3A5A5" stroke-width="1.5"/>
+  <text x="60" y="296" class="name">Camera mount error (systematic)</text>
+  <text x="60" y="322" class="desc">The camera's pose on the wrist was configured</text>
+  <text x="60" y="340" class="desc">21mm / 2.2° off. Every view is wrong, by an amount</text>
+  <text x="60" y="358" class="desc">that depends on the wrist orientation: the table</text>
+  <text x="60" y="376" class="desc">appeared at heights 20mm apart across views.</text>
+  <text x="60" y="410" class="name">Fix: calibrate the mount (6 numbers)</text>
+  <text x="60" y="436" class="desc">Solve for the single mount correction that makes all</text>
+  <text x="60" y="454" class="desc">views agree (point-to-plane over object + table).</text>
+  <text x="60" y="472" class="desc">Spread of the table height: std 6.0mm → 1.0mm.</text>
+  <text x="60" y="490" class="desc">Enter the result in the Viam app once; future captures</text>
+  <text x="60" y="508" class="desc">start out right.</text>
+
+  <rect x="460" y="266" width="400" height="300" rx="12" fill="#FFF8E7" stroke="#E0B85A" stroke-width="1.5"/>
+  <text x="480" y="296" class="name">Residual per-view error (small)</text>
+  <text x="480" y="322" class="desc">After calibration, each view is still off by ~1mm</text>
+  <text x="480" y="340" class="desc">(arm accuracy, calibration leftovers, settling).</text>
+  <text x="480" y="358" class="desc">Fusing slightly misaligned views makes ripples and</text>
+  <text x="480" y="376" class="desc">double walls.</text>
+  <text x="480" y="410" class="name">Fix: joint ICP with an arm-pose prior</text>
+  <text x="480" y="436" class="desc">A 6-DoF correction per view; all overlapping pairs'</text>
+  <text x="480" y="454" class="desc">point-to-plane distances minimized together, each</text>
+  <text x="480" y="472" class="desc">pulled toward 0 (3mm; 1° tilt, 0.3° spin). What the</text>
+  <text x="480" y="490" class="desc">geometry can't see (a cylinder's spin) stays at the</text>
+  <text x="480" y="508" class="desc">arm pose. Corrections over 15mm / 5° are rejected.</text>
+
+  <rect x="880" y="266" width="400" height="300" rx="12" fill="#F2FAF4" stroke="#9CCFAE" stroke-width="1.5"/>
+  <text x="900" y="296" class="name">Sensor noise (random)</text>
+  <text x="900" y="322" class="desc">RealSense depth: ~1-2mm noise at 300mm, flying</text>
+  <text x="900" y="340" class="desc">pixels at edges, no data on steep surfaces.</text>
+  <text x="900" y="358" class="desc">Raw roughness of one view: 0.28mm (real cylinder),</text>
+  <text x="900" y="376" class="desc">0.61mm (synthetic).</text>
+  <text x="900" y="410" class="name">Fix: average many views (TSDF)</text>
+  <text x="900" y="436" class="desc">Per view: median of 5 frames, edge pixels dropped.</text>
+  <text x="900" y="454" class="desc">Across views: signed distances averaged per 1.5mm</text>
+  <text x="900" y="472" class="desc">voxel; surface kept only where 2+ views agree.</text>
+  <text x="900" y="490" class="desc">Roughness with 25 views: 0.10mm (real),</text>
+  <text x="900" y="508" class="desc">0.016mm (synthetic, 37 views).</text>
+</svg>

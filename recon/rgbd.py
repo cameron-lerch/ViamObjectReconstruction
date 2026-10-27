@@ -5,6 +5,7 @@ view.json (camera pose in the world, intrinsics, joints, timestamps).
 """
 
 import json
+import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -68,7 +69,8 @@ def median_depth(frames: list[np.ndarray], min_valid_fraction: float = 0.5) -> n
     stack = np.stack(frames).astype(np.float32)
     valid = stack > 0
     stack[~valid] = np.nan
-    with np.errstate(all="ignore"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # pixels with no reading in any frame
         result = np.nanmedian(stack, axis=0)
     result[valid.mean(axis=0) < min_valid_fraction] = 0
     return np.nan_to_num(result).round().astype(np.uint16)

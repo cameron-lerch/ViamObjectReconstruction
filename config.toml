@@ -27,7 +27,8 @@ settle_s = 0.6               # pause after each move before taking frames
 frames_per_view = 5          # per-pixel median of this many frames
 
 [relocate]
-enabled = true
+# Off until the gripper numbers below are measured and pick and place is tested.
+enabled = false
 # All 37 views plan at the first two on armfarm14 (planned 2026-10-26).
 stations = [[350, -250], [300, -350], [400, -150]]
 # Measure these on the real gripper before enabling relocation with --execute.

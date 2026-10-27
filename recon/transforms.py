@@ -5,6 +5,11 @@ frame into its parent (usually the world). Viam describes orientation with an
 orientation vector (o_x, o_y, o_z, theta in degrees): the frame's z-axis points
 along (o_x, o_y, o_z) and theta spins the frame about that axis. In rotation
 terms that is R = Rz(lon) @ Ry(lat) @ Rz(theta), as in rdk's spatialmath.
+
+Near the poles (axis within 1e-4 of +z or -z) rdk measures theta as if the
+longitude were zero, i.e. theta is the total turn about z. An axis like
+(0.0068, -0.0057, 0.99996) falls in that zone, and ignoring the rule rotates
+the frame by the longitude (here 40deg).
 """
 
 import math
@@ -12,23 +17,31 @@ import math
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-_POLE_EPSILON = 1e-9
+# rdk spatialmath orientationVectorPoleRadius: 1 - |o_z| within this is "at the pole".
+_POLE_RADIUS = 1e-4
+
+
+def _pole_sign(o_z: float) -> int:
+    """+1 or -1 when the axis is within the pole radius of +z or -z, else 0."""
+    return int(np.sign(o_z)) if 1 - abs(o_z) <= _POLE_RADIUS else 0
 
 
 def ov_to_matrix(o_x: float, o_y: float, o_z: float, theta_deg: float) -> np.ndarray:
     axis = np.array([o_x, o_y, o_z], dtype=float)
     axis /= np.linalg.norm(axis)
     lat = math.acos(np.clip(axis[2], -1.0, 1.0))
-    lon = math.atan2(axis[1], axis[0]) if 1 - abs(axis[2]) > _POLE_EPSILON else 0.0
-    return Rotation.from_euler("ZYZ", [lon, lat, math.radians(theta_deg)]).as_matrix()
+    lon = math.atan2(axis[1], axis[0])
+    theta = math.radians(theta_deg) - _pole_sign(axis[2]) * lon
+    return Rotation.from_euler("ZYZ", [lon, lat, theta]).as_matrix()
 
 
 def matrix_to_ov(rotation: np.ndarray) -> tuple[float, float, float, float]:
     axis = rotation[:, 2] / np.linalg.norm(rotation[:, 2])
     lat = math.acos(np.clip(axis[2], -1.0, 1.0))
-    lon = math.atan2(axis[1], axis[0]) if 1 - abs(axis[2]) > _POLE_EPSILON else 0.0
+    lon = math.atan2(axis[1], axis[0])
     spin = Rotation.from_euler("ZY", [lon, lat]).as_matrix().T @ rotation
-    theta = math.degrees(math.atan2(spin[1, 0], spin[0, 0]))
+    theta = math.atan2(spin[1, 0], spin[0, 0]) + _pole_sign(axis[2]) * lon
+    theta = math.degrees(math.atan2(math.sin(theta), math.cos(theta)))
     return float(axis[0]), float(axis[1]), float(axis[2]), theta
 
 
