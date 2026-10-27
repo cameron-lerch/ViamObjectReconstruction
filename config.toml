@@ -8,13 +8,18 @@ arm = "arm"
 camera = "cam"
 gripper = "gripper"
 motion = "builtin"
+# Our calibrated camera mount; the camera frame in the Viam app is then only for its 3D scene.
+camera_mount_file = "calibration/armfarm14_camera_mount.json"
+touch_off_file = "calibration/armfarm14_touch_off.json"
 
 [workspace]
+# Cables rise from around the arm's base on this cell: ignore everything within 350mm of it.
+min_base_distance = 350
 # Table region searched for objects, clear of the walls (front x=800, side y=425).
 x_range = [-350, 700]
 y_range = [-650, 350]
-# Overhead camera positions for the survey (the camera looks straight down).
-survey_positions = [[150, -400, 600], [350, -150, 600]]
+# The survey looks straight down from a grid over this region (600mm up, 340mm apart),
+# visiting every reachable point. To use fixed positions instead: survey_positions = [[x, y, z], ...]
 
 [views]
 standoff = 280               # camera to nearest point of the object

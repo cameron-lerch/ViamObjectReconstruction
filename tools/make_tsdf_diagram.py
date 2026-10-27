@@ -1,5 +1,6 @@
 """Draw media/diagrams/tsdf_fusion.svg (and .png when cairosvg is installed): how
-depth from many views is fused in a voxel grid, and what gets thrown out."""
+depth from many views is fused in a truncated signed distance function (TSDF)
+on a voxel grid, and what gets thrown out."""
 
 from pathlib import Path
 
@@ -41,7 +42,7 @@ def main():
          '.ray{stroke-width:1.4;stroke-dasharray:5 4;fill:none}.truth{stroke:#1F2933;stroke-width:3}'
          '</style></defs>',
          '<rect x="0" y="0" width="1320" height="790" rx="16" fill="#FFFFFF"/>',
-         text(660, 42, "Fusion: how many noisy depth views become one surface (TSDF, 1.5mm voxels, ±6mm band)", "title", "middle")]
+         text(660, 42, "Fusion: how many noisy depth views become one surface (TSDF: truncated signed distance function)", "title", "middle")]
 
     # Panel 1: each view measures the wall with noise
     x = 20
@@ -99,29 +100,61 @@ def main():
         p.append(f'<rect x="{lx}" y="{ly - 10}" width="13" height="13" fill="{color}" stroke="#BCCCDC"/>')
         p.append(text(lx + 18, ly + 1, label, "small"))
 
-    # Panel 3: averaging across views; zero crossing = fused surface
+    # Panel 3: one row of voxels across the wall, with each view's value and the average
     x = 890
-    p += panel_frame(x, "3. Average all views; surface = where it's 0", "weighted average of signed distances per voxel")
-    gx, gy = x + 37, 160
-    readings = [SURFACE_X + 0.35, SURFACE_X - 0.4, SURFACE_X + 0.15]
-    fills = {}
-    for r in range(14):
-        for c in range(14):
-            values = [max(-1, min(1, (m - (c + 0.5)) * 1.5 / 6)) for m in readings if (m - (c + 0.5)) * 1.5 >= -6]
-            if r < 3:  # top rows: only one view reached here
-                values = values[:1]
-            if values:
-                v = np.mean(values)
-                fills[(c, r)] = "#9CC3EA" if v > 0.02 else ("#F2B8B5" if v < -0.02 else "#FFFFFF")
-    p += grid(gx, gy, 14, 14, fills)
-    p.append(f'<rect x="{gx}" y="{gy}" width="{14 * CELL}" height="{3 * CELL}" fill="#FFF5D6" opacity="0.65"/>')
-    p.append(text(gx + 8, gy + 3 * CELL - 8, "seen by 1 view only: not kept in observed.obj", "small"))
-    for m, color in zip(readings, VIEW_COLORS):
-        p.append(f'<line x1="{gx + m * CELL}" y1="{gy + 3 * CELL}" x2="{gx + m * CELL}" y2="{gy + 14 * CELL}" stroke="{color}" stroke-width="1.5" stroke-dasharray="4 3"/>')
-    fused = gx + np.mean(readings) * CELL
-    p.append(f'<line x1="{fused}" y1="{gy + 3 * CELL}" x2="{fused}" y2="{gy + 14 * CELL}" stroke="#1F2933" stroke-width="3"/>')
-    p.append(text(x + 20, 520, "Dashed: three views' readings. Solid: fused surface,", "small"))
-    p.append(text(x + 20, 536, "kept where at least 2 views wrote (weight ≥ 2).", "small"))
+    p += panel_frame(x, "3. Average all views; the surface is where it's 0", "one row of 7 voxels across the wall (values in mm)")
+    centers = np.array([-4.5, -3.0, -1.5, 0.0, 1.5, 3.0, 4.5])  # voxel centers; the true wall is at 0
+    readings = {"view 1": 0.5, "view 2": -0.6, "view 3": 0.2}  # where each view measured the wall
+    rows = {name: np.clip(r - centers, -6, 6) for name, r in readings.items()}  # + in front, − behind
+    rows["average"] = np.mean(list(rows.values()), axis=0)
+    col_w, row_h, left, top = 44, 34, x + 92, 196
+
+    def shade(value):
+        t = min(1.0, abs(value) / 6)
+        base = np.array([0x9C, 0xC3, 0xEA]) if value > 0 else np.array([0xF2, 0xB8, 0xB5])
+        color = (255 - (255 - base) * (0.35 + 0.65 * t)).astype(int)
+        return "#%02X%02X%02X" % tuple(color)
+
+    p.append(text(left - 10, top - 26, "voxel center:", "small", "end"))
+    for k, c in enumerate(centers):
+        p.append(text(left + k * col_w + col_w / 2, top - 26, f"{c:+.1f}", "small", "middle"))
+    p.append(text(left, top - 44, "← outside", "small"))
+    p.append(text(left + 7 * col_w, top - 44, "inside →", "small", "end"))
+    p.append(text(left + 3 * col_w + col_w / 2, top - 58, "true wall", "small", "middle"))
+    for r, (name, values) in enumerate(rows.items()):
+        y = top + r * row_h + (10 if name == "average" else 0)
+        color = VIEW_COLORS[r] if r < 3 else "#1F2933"
+        p.append(text(left - 10, y + row_h / 2 + 4, name, "bold" if name == "average" else "desc", "end"))
+        if r < 3:
+            p.append(f'<rect x="{left - 86}" y="{y + row_h / 2 - 5}" width="10" height="10" rx="2" fill="{color}"/>')
+        for k, value in enumerate(values):
+            p.append(f'<rect x="{left + k * col_w}" y="{y}" width="{col_w}" height="{row_h}" fill="{shade(value)}" stroke="#FFFFFF" stroke-width="2"/>')
+            p.append(text(left + k * col_w + col_w / 2, y + row_h / 2 + 4, f"{value:+.1f}", "bold" if name == "average" else "small", "middle"))
+        if r < 3:  # where this view put the wall: ticks on the row's edges, clear of the numbers
+            wx = left + (readings[name] - centers[0]) / 1.5 * col_w + col_w / 2
+            p.append(f'<path d="M{wx},{y} L{wx},{y + 7} M{wx},{y + row_h - 7} L{wx},{y + row_h}" stroke="{color}" stroke-width="3"/>')
+    # The average crosses zero between two voxels: linear interpolation gives the surface.
+    avg = rows["average"]
+    k = int(np.where(np.diff(np.sign(avg)) != 0)[0][0])
+    surface = centers[k] + avg[k] / (avg[k] - avg[k + 1]) * 1.5
+    sx = left + (surface - centers[0]) / 1.5 * col_w + col_w / 2
+    true_x = left + (0 - centers[0]) / 1.5 * col_w + col_w / 2
+    y_avg = top + 3 * row_h + 10
+    p.append(f'<path d="M{sx},{y_avg - 6} L{sx},{y_avg + 8} M{sx},{y_avg + row_h - 8} L{sx},{y_avg + row_h + 6}" stroke="#1F2933" stroke-width="3"/>')
+    p.append(text(sx, y_avg + row_h + 20, "fused surface", "small", "middle"))
+    p.append(f'<line x1="{true_x}" y1="{top - 52}" x2="{true_x}" y2="{top - 32}" stroke="#2E9E5B" stroke-width="1.5" stroke-dasharray="4 3"/>')
+    # How many views wrote to each voxel: the weight that "seen by at least 2 views" checks.
+    y_w = y_avg + row_h + 30
+    p.append(text(left - 10, y_w + 17, "views", "desc", "end"))
+    for k in range(len(centers)):
+        p.append(f'<rect x="{left + k * col_w}" y="{y_w}" width="{col_w}" height="24" fill="#F0F4F8" stroke="#FFFFFF" stroke-width="2"/>')
+        p.append(text(left + k * col_w + col_w / 2, y_w + 17, "3", "small", "middle"))
+    errors = ", ".join(f"{abs(r):.1f}" for r in readings.values())
+    p.append(text(x + 20, y_w + 52, f"Ticks: where each view put the wall ({errors}mm off).", "desc"))
+    p.append(text(x + 20, y_w + 70, f"The average crosses 0 at {abs(surface):.2f}mm from the true wall:", "desc"))
+    p.append(text(x + 20, y_w + 88, "that is the fused surface. A surface is kept only where", "desc"))
+    p.append(text(x + 20, y_w + 106, "at least 2 views wrote (the views row).", "desc"))
+    p.append(text(x + 20, 532, "Blue: in front of a reading (+). Red: behind it (−).", "small"))
 
     # Bottom strip: what is thrown out, and where
     p.append('<rect x="20" y="560" width="1280" height="212" rx="14" fill="#F0F4F8" stroke="#BCCCDC" stroke-width="1.5"/>')

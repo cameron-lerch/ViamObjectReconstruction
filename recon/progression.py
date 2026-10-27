@@ -133,7 +133,7 @@ def progression(views: list[View], obj: DetectedObject, plane: TablePlane, confi
                          if len(full.observed.triangles) else np.zeros((0, 3)))
 
     first = sequence[0]
-    raw, _, _ = back_project(posed[first], 2, config.camera.min_depth, config.camera.max_depth, poses[first])
+    raw, _, _ = back_project(posed[first], 2, config.camera.min_depth, config.camera.max_depth, poses[first], edge_grow=config.reconstruct.edge_grow)
     raw = raw[object_mask(raw, obj, planes[first], config.reconstruct)]
     (folder / "views_01").mkdir(parents=True, exist_ok=True)
     o3d.io.write_point_cloud(str(folder / "views_01" / "raw_points.ply"), to_point_cloud(raw))

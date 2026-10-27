@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import open3d as o3d
+from scipy import ndimage
 
 from .transforms import transform_points
 
@@ -76,16 +77,22 @@ def median_depth(frames: list[np.ndarray], min_valid_fraction: float = 0.5) -> n
     return np.nan_to_num(result).round().astype(np.uint16)
 
 
-def edge_mask(depth: np.ndarray, relative_jump: float = 0.02, min_jump: float = 5.0) -> np.ndarray:
-    """Pixels next to a depth discontinuity. RealSense "flying pixels" sit there,
-    floating between the near and far surface, so they are dropped."""
+def edge_mask(depth: np.ndarray, relative_jump: float = 0.02, min_jump: float = 5.0, grow: int = 0) -> np.ndarray:
+    """Pixels next to a depth discontinuity, widened by `grow` pixels.
+
+    RealSense "flying pixels" sit right at the jump, floating between the near and
+    far surface. A few pixels further in, stereo matching still blends the two
+    ("edge fattening"), pushing an object's outline outward; `grow` drops those too.
+    """
     padded = np.pad(depth.astype(np.float32), 1, mode="edge")
     center = padded[1:-1, 1:-1]
     jump = np.zeros_like(center)
     for dy, dx in ((0, 1), (2, 1), (1, 0), (1, 2)):
         neighbor = padded[dy : dy + depth.shape[0], dx : dx + depth.shape[1]]
         jump = np.maximum(jump, np.where(neighbor > 0, np.abs(neighbor - center), 0))
-    return jump > np.maximum(min_jump, relative_jump * center)
+    # A pixel without a reading (a dropout) isn't an edge, however different its neighbors are.
+    edges = (jump > np.maximum(min_jump, relative_jump * center)) & (center > 0)
+    return ndimage.binary_dilation(edges, iterations=grow) if grow else edges
 
 
 def pixel_rays(intrinsics: Intrinsics, stride: int = 1) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -96,11 +103,12 @@ def pixel_rays(intrinsics: Intrinsics, stride: int = 1) -> tuple[np.ndarray, np.
 
 
 def back_project(view: View, stride: int = 1, min_depth: float = 0.0, max_depth: float = np.inf,
-                 T_world_cam: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """World points, their colors (0-1) and their (row, col) pixels for every valid depth reading away from edges."""
+                 T_world_cam: np.ndarray | None = None, edge_grow: int = 0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """World points, their colors (0-1) and their (row, col) pixels for every valid depth
+    reading away from depth edges (and `edge_grow` pixels beyond them)."""
     v, u, rays = pixel_rays(view.intrinsics, stride)
     depth = view.depth[::stride, ::stride].astype(float)
-    edges = edge_mask(view.depth)[::stride, ::stride]
+    edges = edge_mask(view.depth, grow=edge_grow)[::stride, ::stride]
     keep = (depth > min_depth) & (depth < max_depth) & (depth > 0) & ~edges
     points_cam = rays[keep] * depth[keep][:, None]
     pose = view.T_world_cam if T_world_cam is None else T_world_cam

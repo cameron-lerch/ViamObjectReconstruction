@@ -11,19 +11,23 @@ from wherever the arm is now.
     python scan.py calibrate-board        # ChArUco board: plan views (add --execute to capture and solve)
     python scan.py reconstruct            # rebuild meshes from the latest session's saved views
     python scan.py progression --objects 1  # meshes and metrics from 1, 2, ... n views
+    python scan.py compare --objects 1    # measure the mesh and compare with ground_truth.toml
     python scan.py demo                   # the whole pipeline on synthetic data, no robot needed
 """
 
 import argparse
 import asyncio
+import json
 import logging
 import time
 
 import numpy as np
+import open3d as o3d
 from scipy.spatial.transform import Rotation
 
 from recon import pipeline, synthetic
 from recon.config import Config, load_config
+from recon.measure import compare, load_truth, match_truth, measure
 from recon.progression import progression, shape_error
 from recon.progression import table as progression_table
 from recon.reconstruct import object_mask, surface_distances
@@ -31,14 +35,20 @@ from recon.rgbd import back_project, load_views, save_view
 from recon.robot import MoveDeclined, PoseMismatch, Robot, connect
 from recon.scene import detect_objects, fit_table_plane
 from recon.session import Session
+from recon.touchoff import touch_off
 from recon.transforms import look_at, matrix_to_ov
 from recon.views import generate_candidates, order_for_travel
 
 log = logging.getLogger("scan")
 
 
-def selected(objects, ids: list[int] | None):
-    return [obj for obj in objects if ids is None or obj.id in ids]
+def selected(objects, wanted: list[int | str] | None):
+    """Objects by id or by color name (`--objects 1,green`)."""
+    return [obj for obj in objects if wanted is None or obj.id in wanted or obj.color_name in wanted]
+
+
+def object_list(text: str) -> list[int | str]:
+    return [int(v) if v.strip().isdigit() else v.strip().lower() for v in text.split(",")]
 
 
 async def run_robot(args, config: Config) -> None:
@@ -62,11 +72,40 @@ async def run_robot(args, config: Config) -> None:
 
 
 async def run_steps(robot: Robot, args, config: Config) -> None:
+    if args.command == "touch-off":
+        session = Session.latest(config.resolve(config.data_dir))
+        objects, plane = session.load_scene()
+        robot.set_measured_table(plane)
+        board = session.read().get("board")
+        log.info("Using the survey in %s", session.root)
+        result = await touch_off(robot, objects, plane, config, args.execute, board["center"] if board else None)
+        if result:
+            path = config.resolve(config.machine.touch_off_file or "calibration/touch_off.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(result | {"session": session.root.name}, indent=2) + "\n")
+            log.info("Fingertips reach %.1fmm past the gripper frame (spread %.1fmm over %d spots); the collision model says %.1fmm.",
+                     result["reach_mm"], result["reach_spread_mm"], len(result["points"]), result["modeled_reach_mm"])
+            if result["extra_reach_mm"] > 0:
+                log.info("The real fingertips reach %.1fmm further than the model: every plan now adds that to the table margin.",
+                         result["extra_reach_mm"])
+            else:
+                log.info("The model covers the real fingertips; the table margin stays at %.0fmm.", config.workspace.table_safety_margin)
+            log.info("Saved to %s", path)
+        return
     if args.command == "calibrate-board":
+        known = None
+        try:
+            board = Session.latest(config.resolve(config.data_dir)).read().get("board")
+            known = np.array(board["center"]) if board else None
+        except FileNotFoundError:
+            pass
         session = Session.create(config.resolve(config.data_dir), "board-" + time.strftime("%Y%m%d-%H%M%S"))
-        result = await pipeline.board_calibration(robot, session, config, args.execute)
+        result = await pipeline.board_calibration(robot, session, config, args.execute, known_center=known)
         if result:
             report_board(result, session)
+            if args.save_mount:
+                path = pipeline.save_mount(config, np.array(result["board_mount"]), f"scan.py calibrate-board, {session.root.name}")
+                log.info("Saved as the camera mount for all moves and captures: %s", path)
         return
     reuse = (args.command == "plan" and not args.new_survey) or (args.command == "scan" and args.reuse_survey)
     if reuse:
@@ -125,7 +164,12 @@ def run_calibrate(args, config: Config) -> None:
     calibration = pipeline.calibrate_session(session, args.objects[0], config)
     log.info("%s", calibration.describe())
     log.info("Saved to %s; reconstructions of this session now use it.", session.root / pipeline.CALIBRATION_FILE)
-    log.info("To use it for future captures, set the camera's frame (parent: arm) in the Viam app to:\n%s",
+    if args.save_mount:
+        path = pipeline.save_mount(config, calibration.mount, f"scan.py calibrate on {session.root.name}, object {args.objects[0]}")
+        log.info("Saved as the camera mount for all moves and captures: %s", path)
+    else:
+        log.info("Add --save-mount to use it for all moves and captures (%s).", config.machine.camera_mount_file)
+    log.info("For the Viam app's 3D scene only (optional), the camera frame (parent: arm) would be:\n%s",
              viam_frame(calibration.mount))
 
 
@@ -136,6 +180,31 @@ def run_reconstruct(args, config: Config) -> None:
     for obj in selected(objects, args.objects):
         if session.views_dir(obj.id).exists():
             pipeline.reconstruct_object(session, obj.id, plane, config, refine=not args.no_refine)
+
+
+def run_compare(args, config: Config) -> None:
+    """Measure reconstructed meshes like calipers would and compare them with ground_truth.toml."""
+    truth = load_truth(config.resolve(args.truth_file))
+    session = Session(args.session) if args.session else Session.latest(config.resolve(config.data_dir))
+    objects, _ = session.load_scene()
+    for obj in selected(objects, args.objects):
+        folder = session.recon_dir(obj.id)
+        if not (folder / "mesh.ply").exists():
+            continue
+        scanned = pipeline.scanned_object(session, obj.id)
+        name = args.truth or match_truth(truth, scanned.color_name or obj.color_name)
+        if name is None:
+            log.info("Object %d (%s): no matching ground truth; pass --truth NAME", obj.id, obj.color_name or "no color")
+            continue
+        entry = truth[name]
+        mesh = o3d.io.read_triangle_mesh(str(folder / "mesh.ply"))
+        measured = measure(mesh, entry["shape"])
+        rows = compare(measured, entry)
+        lines = [f"  {key:9s} {got:7.2f}mm  vs {want:6.2f}mm  {error:+6.2f}mm ({100 * error / want:+.1f}%)"
+                 for key, got, want, error in rows]
+        log.info("Object %d vs %s (calipers):\n%s", obj.id, name, "\n".join(lines))
+        session.write_json(folder / "accuracy.json", {"truth": name, "measured": measured,
+                                                      "errors": {key: error for key, _, _, error in rows}})
 
 
 def run_progression(args, config: Config) -> None:
@@ -201,7 +270,7 @@ def run_demo(config: Config, with_progression: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["survey", "plan", "scan", "calibrate", "calibrate-board", "reconstruct", "progression", "demo"])
+    parser.add_argument("command", choices=["survey", "plan", "scan", "calibrate", "calibrate-board", "touch-off", "reconstruct", "progression", "compare", "demo"])
     parser.add_argument("--config", default="config.toml")
     parser.add_argument("--execute", action="store_true", help="allow the arm to move")
     parser.add_argument("--step", action="store_true", help="confirm before each object and each relocation")
@@ -210,10 +279,14 @@ def main() -> None:
                         help="show every move, but only ask when some joint turns at least DEG degrees")
     parser.add_argument("--max-views", type=int, help="scan: capture only the first N views of each object (top first)")
     parser.add_argument("--reuse-survey", action="store_true", help="scan: use the latest survey instead of surveying again")
-    parser.add_argument("--objects", type=lambda s: [int(v) for v in s.split(",")], help="object ids, e.g. 0,2")
+    parser.add_argument("--objects", type=object_list, help="object ids or color names, e.g. 0,2 or green,yellow")
     parser.add_argument("--new-survey", action="store_true", help="plan: survey again instead of using the latest")
     parser.add_argument("--session", help="reconstruct: session folder (default: latest)")
     parser.add_argument("--no-refine", action="store_true", help="reconstruct: use arm poses without ICP refinement")
+    parser.add_argument("--truth", help="compare: the ground_truth.toml entry to compare with (default: by color)")
+    parser.add_argument("--truth-file", default="ground_truth.toml", help="compare: caliper measurements")
+    parser.add_argument("--save-mount", action="store_true",
+                        help="calibrate, calibrate-board: use the result as the camera mount for all moves and captures")
     parser.add_argument("--counts", type=lambda s: [int(v) for v in s.split(",")],
                         help="progression: view counts to build, e.g. 1,2,3,5,10,25 (default: every count)")
     parser.add_argument("--order", choices=["spread", "capture"], default="spread",
@@ -233,6 +306,8 @@ def main() -> None:
         run_demo(config, args.progression)
     elif args.command == "progression":
         run_progression(args, config)
+    elif args.command == "compare":
+        run_compare(args, config)
     elif args.command == "calibrate":
         run_calibrate(args, config)
     elif args.command == "reconstruct":

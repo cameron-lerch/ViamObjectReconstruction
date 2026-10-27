@@ -100,7 +100,8 @@ def depth_model(views: list[View], found: list[BoardView]) -> dict:
 
 def locate_flat(view: View, found: BoardView, spec: BoardSpec) -> np.ndarray:
     """The board's world pose, assuming it lies flat: heading from the image, height
-    and position from the depth at the detected corners.
+    and position from the depth at the detected corners (or, without depth, from the
+    image fit near them).
 
     A partial view pins the board's tilt down poorly, and extending a slightly
     tilted fit to the far side of the board misplaces it by centimeters.
@@ -112,16 +113,16 @@ def locate_flat(view: View, found: BoardView, spec: BoardSpec) -> np.ndarray:
     y_axis = np.cross(up, x_axis)
     rotation = np.column_stack([x_axis, y_axis, up])
     rays = (found.pixels - view.intrinsics.matrix[:2, 2]) / [view.intrinsics.fx, view.intrinsics.fy]
+    # Without depth (a color-only view), the corners' positions from the image fit:
+    # accurate near the detected corners, which is enough to aim a better view.
+    fitted = found.board_points @ found.T_cam_board[:3, :3].T + found.T_cam_board[:3, 3]
     origins = []
-    for (u, v), ray, corner in zip(found.pixels, rays, found.board_points):
+    for (u, v), ray, corner, camera_point in zip(found.pixels, rays, found.board_points, fitted):
         patch = view.depth[int(v) - 3 : int(v) + 4, int(u) - 3 : int(u) + 4].astype(float)
         patch = patch[patch > 0]
-        if len(patch) < 9:
-            continue
-        world = view.T_world_cam[:3, :3] @ (np.append(ray, 1.0) * np.median(patch)) + view.T_world_cam[:3, 3]
+        point = np.append(ray, 1.0) * np.median(patch) if len(patch) >= 9 else camera_point
+        world = view.T_world_cam[:3, :3] @ point + view.T_world_cam[:3, 3]
         origins.append(world - rotation @ corner)
-    if not origins:
-        return view.T_world_cam @ found.T_cam_board
     return make_transform(rotation, np.median(origins, axis=0))
 
 

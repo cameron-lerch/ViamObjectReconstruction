@@ -45,7 +45,7 @@ class MountCalibration:
 
 def _camera_cloud(view: View, obj: DetectedObject, config: Config, ring: float):
     """Points (and normals) of the object and a ring of table, in the camera's own frame."""
-    points, _, _ = back_project(view, 2, config.camera.min_depth, config.camera.max_depth)
+    points, _, _ = back_project(view, 2, config.camera.min_depth, config.camera.max_depth, edge_grow=config.reconstruct.edge_grow)
     keep = obj.contains(points, ring)
     cloud = to_point_cloud(points[keep]).voxel_down_sample(3.0)
     cloud, _ = cloud.remove_statistical_outlier(20, 2.0)

@@ -55,7 +55,7 @@ def local_table_plane(view: View, pose: np.ndarray, obj: DetectedObject, fallbac
     used for cropping, cancels that.
     """
     settings = config.reconstruct
-    points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth, pose)
+    points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
     ring = (obj.contains(points, settings.crop_margin + settings.table_ring)
             & ~obj.contains(points, settings.crop_margin) & (np.abs(fallback.height(points)) < 20))
     if ring.sum() < 200:
@@ -69,7 +69,7 @@ def local_table_plane(view: View, pose: np.ndarray, obj: DetectedObject, fallbac
 
 def registration_cloud(view: View, obj: DetectedObject, config: Config) -> o3d.geometry.PointCloud:
     settings = config.reconstruct
-    points, colors, _ = back_project(view, settings.pixel_stride, config.camera.min_depth, config.camera.max_depth)
+    points, colors, _ = back_project(view, settings.pixel_stride, config.camera.min_depth, config.camera.max_depth, edge_grow=config.reconstruct.edge_grow)
     keep = obj.contains(points, settings.context_margin)
     cloud = to_point_cloud(points[keep], colors[keep]).voxel_down_sample(settings.registration_voxel)
     cloud, _ = cloud.remove_statistical_outlier(20, 2.0)
@@ -196,7 +196,7 @@ def fuse(views: list[View], poses: list[np.ndarray], obj: DetectedObject, planes
         settings.voxel, 16, 50000, device)
     trunc_voxels = settings.sdf_trunc / settings.voxel
     for view, pose, plane in zip(views, poses, planes):
-        points, _, pixels = back_project(view, 1, config.camera.min_depth, config.camera.max_depth, pose)
+        points, _, pixels = back_project(view, 1, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
         keep = object_mask(points, obj, plane, settings)
         depth = np.zeros_like(view.depth)
         rows, cols = pixels[keep].T
@@ -238,7 +238,7 @@ def view_deviation(views: list[View], poses: list[np.ndarray], mesh: o3d.geometr
     """How far each single view's raw object points lie from the fused surface."""
     results = []
     for view, pose, plane in zip(views, poses, planes):
-        points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth, pose)
+        points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
         points = points[object_mask(points, obj, plane, config.reconstruct)]
         if len(points) == 0 or len(mesh.triangles) == 0:
             continue
@@ -304,7 +304,7 @@ def refit_object(views: list[View], poses: list[np.ndarray], obj: DetectedObject
     gathered = []
     for view, pose in zip(views, poses):
         table = local_table_plane(view, pose, obj, plane, config)
-        points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth, pose)
+        points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
         keep = obj.contains(points, settings.refit_search) & (table.height(points) > settings.table_clearance + 3)
         gathered.append(points[keep])
     points = np.concatenate(gathered) if gathered else np.zeros((0, 3))

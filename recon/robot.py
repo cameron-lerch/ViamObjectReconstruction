@@ -102,6 +102,8 @@ class Robot:
         self.motion = MotionClient.from_robot(machine, names.motion)
         self._intrinsics: Intrinsics | None = None
         self.table_plane: TablePlane | None = None
+        # Off only for touch-off, which has to come close to the table on purpose.
+        self.use_table_slab = True
         self._camera_mount: np.ndarray | None = None
         # Preview every move and ask the operator (see _confirm_move); with
         # confirm_above_deg set, only ask when some joint turns at least that far.
@@ -113,24 +115,40 @@ class Robot:
         table, which may sit lower than the real one."""
         self.table_plane = plane
 
-    def table_patch(self, obj: DetectedObject) -> Geometry:
-        """A slab of measured table around an object, where low views and grasps go.
+    def table_slab(self) -> list[Geometry]:
+        """The table as an obstacle whose top sits a safety margin ABOVE the measured surface.
 
-        Its top is the measured surface's highest point over the patch. The patch
-        stops short of the arm base, which stands on the table.
+        The machine's configured table sat 6-11mm below the real one, and the gripper
+        hit the table on a low view. This slab covers the search region (plus 150mm)
+        with a square cut out around the arm's base (which stands on the table), as
+        four boxes. Its top is the measured surface's highest point over each box,
+        plus `table_safety_margin`, plus any extra reach of the real fingertips over
+        the gripper's collision model found by `scan.py touch-off`.
         """
         workspace = self.config.workspace
-        center = obj.center[:2]
-        half = obj.footprint_radius + workspace.table_patch_size / 2
-        half = min(half, (np.linalg.norm(center) - workspace.min_base_distance) / np.sqrt(2))
-        corners = [(center[0] + dx, center[1] + dy) for dx in (-half, half) for dy in (-half, half)]
-        top = max(self.table_plane.z_at(x, y) for x, y in corners) - workspace.table_obstacle_margin
-        thickness = 100.0
-        return Geometry(
-            center=Pose(x=center[0], y=center[1], z=top - thickness / 2, o_z=1),
-            box=RectangularPrism(dims_mm=Vector3(x=2 * half, y=2 * half, z=thickness)),
-            label=f"measured-table-{obj.id}",
-        )
+        (x0, x1), (y0, y1) = workspace.x_range, workspace.y_range
+        x0, x1, y0, y1 = x0 - 150, x1 + 150, y0 - 150, y1 + 150
+        c = workspace.base_clearance
+        boxes = [(x0, x1, c, y1), (x0, x1, y0, -c), (c, x1, -c, c), (x0, -c, -c, c)]
+        margin = workspace.table_safety_margin + self.fingertip_extra_reach()
+        slab, thickness = [], 100.0
+        for k, (bx0, bx1, by0, by1) in enumerate(boxes):
+            if bx1 <= bx0 or by1 <= by0:
+                continue
+            top = max(self.table_plane.z_at(x, y) for x in (bx0, bx1) for y in (by0, by1)) + margin
+            slab.append(Geometry(
+                center=Pose(x=(bx0 + bx1) / 2, y=(by0 + by1) / 2, z=top - thickness / 2, o_z=1),
+                box=RectangularPrism(dims_mm=Vector3(x=bx1 - bx0, y=by1 - by0, z=thickness)),
+                label=f"measured-table-{k}"))
+        return slab
+
+    def fingertip_extra_reach(self) -> float:
+        """How much further the real fingertips reach than the gripper's collision model,
+        from the touch-off file (0 when there is none or they don't)."""
+        path = self.config.resolve(self.config.machine.touch_off_file) if self.config.machine.touch_off_file else None
+        if path is None or not path.exists():
+            return 0.0
+        return max(0.0, float(json.loads(path.read_text()).get("extra_reach_mm", 0.0)))
 
     async def intrinsics(self) -> Intrinsics:
         if self._intrinsics is None:
@@ -144,7 +162,15 @@ class Robot:
         return pose_to_matrix(result.pose)
 
     async def camera_mount(self) -> np.ndarray:
-        """The camera's configured pose relative to the arm's end (its frame-system parent)."""
+        """The camera's pose relative to the arm's end.
+
+        From our own calibration file when `[machine] camera_mount_file` is set (so the
+        camera frame in the Viam app only affects its 3D scene), otherwise from the
+        machine's frame configuration.
+        """
+        if self._camera_mount is None and self.config.machine.camera_mount_file:
+            path = self.config.resolve(self.config.machine.camera_mount_file)
+            self._camera_mount = np.array(json.loads(path.read_text())["mount"])
         if self._camera_mount is None:
             for part in await self.machine.get_frame_system_config():
                 frame = part.frame
@@ -158,33 +184,40 @@ class Robot:
         return self._camera_mount
 
     async def checked_camera_pose(self) -> np.ndarray:
-        """Camera pose from the frame system, verified against the arm controller.
+        """Camera pose from the arm controller and our camera mount, after checking that
+        Viam's frame system agrees with the controller about where the arm's end is.
 
-        On armfarm14 the frame system once reported the camera at its planned
-        target while the arm's joints (and the image) showed it rolled 180deg away.
-        The planner checks collisions with the frame system, so a disagreement
-        stops everything. Returns the pose computed from the controller.
+        On armfarm14 the frame system once reported the camera at its planned target
+        while the arm's joints (and the image) showed it rolled 180deg away. The planner
+        checks collisions with the frame system, so a disagreement stops everything.
         """
-        frame_system = await self.frame_pose(self.config.machine.camera)
-        controller = pose_to_matrix(await self.arm.get_end_position()) @ await self.camera_mount()
+        frame_system = await self.frame_pose(self.config.machine.arm)
+        controller = pose_to_matrix(await self.arm.get_end_position())
         shift = float(np.linalg.norm(frame_system[:3, 3] - controller[:3, 3]))
         angle = rotation_angle_deg(frame_system[:3, :3].T @ controller[:3, :3])
         if shift > POSE_TOLERANCE_MM or angle > POSE_TOLERANCE_DEG:
             joints = [round(v, 1) for v in (await self.arm.get_joint_positions()).values]
             raise PoseMismatch(
-                f"Frame system and arm controller disagree about the camera by {shift:.1f}mm / {angle:.1f}deg.\n"
+                f"Frame system and arm controller disagree about the arm's end by {shift:.1f}mm / {angle:.1f}deg.\n"
                 f"  frame system: position {frame_system[:3, 3].round(1)}, x-axis {frame_system[:3, 0].round(3)}\n"
                 f"  controller:   position {controller[:3, 3].round(1)}, x-axis {controller[:3, 0].round(3)}\n"
                 f"  joints (deg): {joints}")
-        return controller
+        return controller @ await self.camera_mount()
+
+    async def _resolve(self, frame: str, T_world: np.ndarray) -> tuple[str, np.ndarray]:
+        """Camera targets become arm-end targets through our camera mount, so motion
+        never depends on the camera frame configured in the Viam app."""
+        if frame == self.config.machine.camera:
+            return self.config.machine.arm, T_world @ np.linalg.inv(await self.camera_mount())
+        return frame, T_world
 
     def world_state(self, obstacles: list[DetectedObject], margin: float,
                     carried: tuple[DetectedObject, np.ndarray] | None = None) -> WorldState | None:
         """Detected objects and the measured table as obstacles, plus an object held in
         the gripper (with its pose relative to the gripper)."""
         geometries = [box_geometry(obj, margin, f"object-{obj.id}") for obj in obstacles]
-        if self.table_plane is not None:
-            geometries += [self.table_patch(obj) for obj in obstacles if np.linalg.norm(obj.center[:2]) > self.config.workspace.min_base_distance]
+        if self.table_plane is not None and self.use_table_slab:
+            geometries += self.table_slab()
         transforms = []
         if carried is not None:
             obj, T_gripper_obj = carried
@@ -201,6 +234,7 @@ class Robot:
     async def plan(self, frame: str, T_world: np.ndarray, world_state: WorldState | None = None,
                    linear: bool = False) -> tuple[list | None, str]:
         """Plan without moving. Returns (trajectory, "") or (None, reason)."""
+        frame, T_world = await self._resolve(frame, T_world)
         request = MoveRequest(
             name=self.config.machine.motion,
             component_name=frame,
@@ -248,6 +282,7 @@ class Robot:
                    linear: bool = False) -> None:
         if self.confirm_moves:
             await self._confirm_move(frame, T_world, world_state, linear)
+        frame, T_world = await self._resolve(frame, T_world)
         moved = await self.motion.move(
             component_name=frame,
             destination=PoseInFrame(reference_frame="world", pose=matrix_to_pose(T_world)),
@@ -300,28 +335,32 @@ class Robot:
                 raise TimeoutError("Arm still reports motion")
             await asyncio.sleep(0.05)
 
-    async def capture(self, frames: int | None = None) -> tuple[bytes, str, np.ndarray, np.ndarray, dict]:
+    async def capture(self, frames: int | None = None, depth: bool = True) -> tuple[bytes, str, np.ndarray, np.ndarray, dict]:
         """Capture a still view: wait for the arm to settle, then take the median of several fresh frames.
 
         Frames are accepted only if the camera stamped them at least `settle_s`
         after the arm stopped (by the robot's own clock), so frames buffered
         during motion are never used. The camera pose is read after settling.
+        With `depth=False` only color is fetched (about 0.15s instead of 2-3s over
+        a cloud connection, where a depth image is 1.8MB) and the depth is empty.
         Returns (color bytes, color extension, depth mm, T_world_cam, metadata).
         """
         capture = self.config.capture
+        names = self.config.machine
         frames = frames or capture.frames_per_view
         await self.wait_until_still()
-        _, metadata = await self.camera.get_images()
+        # The robot's clock at the stop, from a cheap color-only frame.
+        _, metadata = await self.camera.get_images(filter_source_names=[names.color_source])
         stopped_at = metadata.captured_at.ToMicroseconds() / 1e6
         await asyncio.sleep(capture.settle_s)
 
+        sources = [names.color_source, names.depth_source] if depth else [names.color_source]
         depths, stamps, color, color_ext = [], [], None, "jpg"
-        # Each get_images can take seconds over a cloud connection (depth alone is ~1.8MB).
         deadline = time.monotonic() + capture.frame_timeout_s * frames
-        while len(depths) < frames:
+        while len(stamps) < frames:
             if time.monotonic() > deadline:
-                raise TimeoutError(f"Got only {len(depths)} of {frames} fresh frames")
-            images, metadata = await self.camera.get_images()
+                raise TimeoutError(f"Got only {len(stamps)} of {frames} fresh frames")
+            images, metadata = await self.camera.get_images(filter_source_names=sources)
             stamp = metadata.captured_at.ToMicroseconds() / 1e6
             if stopped_at and (stamp < stopped_at + capture.settle_s or stamp in stamps):
                 await asyncio.sleep(0.02)
@@ -336,6 +375,11 @@ class Robot:
 
         T_world_cam = await self.checked_camera_pose()
         joints = list((await self.arm.get_joint_positions()).values)
-        meta = {"captured_at": stamps, "joints_deg": joints, "frames": frames,
+        meta = {"captured_at": stamps, "joints_deg": joints, "frames": frames, "depth": depth,
                 "camera_mount": (await self.camera_mount()).tolist()}
-        return color, color_ext, median_depth(depths), T_world_cam, meta
+        if depths:
+            fused = median_depth(depths)
+        else:
+            intrinsics = await self.intrinsics()
+            fused = np.zeros((intrinsics.height, intrinsics.width), np.uint16)
+        return color, color_ext, fused, T_world_cam, meta

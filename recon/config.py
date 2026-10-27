@@ -13,7 +13,16 @@ class MachineConfig:
     arm: str = "arm"
     camera: str = "cam"
     gripper: str = "gripper"
+    # Names of the camera's color and depth images (get_images sources).
+    color_source: str = "color"
+    depth_source: str = "depth"
     motion: str = "builtin"
+    # Our calibrated camera mount (camera pose on the arm's end), used for every move
+    # and capture. Empty: use the camera frame configured on the machine instead.
+    camera_mount_file: str = ""
+    # Touch-off result (`scan.py touch-off`): how far the real fingertips reach past
+    # the gripper's collision model, added to the table safety margin.
+    touch_off_file: str = ""
 
 
 @dataclass
@@ -22,18 +31,30 @@ class WorkspaceConfig:
     x_range: list[float] = field(default_factory=lambda: [150.0, 650.0])
     y_range: list[float] = field(default_factory=lambda: [-500.0, 180.0])
     # Camera positions for the survey; the camera looks straight down from each.
-    survey_positions: list[list[float]] = field(default_factory=lambda: [[380.0, -150.0, 550.0]])
-    # Points closer than this (horizontally) to the arm base are the arm itself.
+    survey_positions: list[list[float]] = field(default_factory=list)
+    # Without survey_positions: a grid over the search region at this height, spaced so
+    # neighboring views overlap (the image's short side covers ~0.79 x height).
+    survey_height: float = 600.0
+    survey_spacing: float = 340.0
+    # Points within this horizontal distance of the arm's base are the arm itself (and,
+    # on some cells, the cables around it); nothing that close is a scan target.
     min_base_distance: float = 200.0
-    # Around each object, the measured table is added as an obstacle (this far
-    # below its surface, over a patch this wide), in case it sits higher than the
-    # table configured on the machine.
-    table_obstacle_margin: float = 3.0
-    table_patch_size: float = 300.0
+    # Every plan treats the table as a slab whose top is this far ABOVE the measured
+    # table (the machine's configured table can sit lower than the real one), with a
+    # square of this half-size cut out around the arm's base.
+    table_safety_margin: float = 15.0
+    base_clearance: float = 200.0
     # Points count toward objects from this height above the table; an object's
     # top must reach `min_object_top`, which rejects sensor noise on the table.
     min_object_height: float = 8.0
-    min_object_top: float = 20.0
+    min_object_top: float = 25.0
+    # Scan targets are at most this wide and stand in open table: at least
+    # min_table_support of the clear_margin around their footprint is bare table.
+    # Cords at the table's edge, power strips and things in gaps between tables
+    # aren't; two objects closer than clear_margin would reject each other.
+    max_object_size: float = 150.0
+    clear_margin: float = 60.0
+    min_table_support: float = 0.9
     max_object_height: float = 250.0
     min_object_points: int = 100
     cluster_distance: float = 10.0
@@ -76,6 +97,8 @@ class CaptureConfig:
     frames_per_view: int = 5
     # Allowed time per frame.
     frame_timeout_s: float = 10.0
+    # Frames per survey view: finding objects needs less precision than scanning them.
+    survey_frames: int = 1
     move_timeout_s: float = 60.0
 
 
@@ -107,6 +130,11 @@ class ReconstructConfig:
     # "auto" uses CUDA when Open3D was built with it, else "CPU:0".
     device: str = "auto"
     pixel_stride: int = 2
+    # Also drop pixels this close to a depth edge, where stereo "edge fattening"
+    # pushes surfaces outward (real cylinder: +2.3mm within 3px of its outline). 2px
+    # takes the real cylinder from 32.62 to 32.22mm (calipers 29.53); wider gains
+    # nothing there and costs accuracy on clean data. Survey detection doesn't use it.
+    edge_grow: int = 2
     # Fusion keeps points within this margin around the object's box ...
     crop_margin: float = 12.0
     # ... and at least this far above the table.
@@ -154,7 +182,12 @@ class ReconstructConfig:
 @dataclass
 class BoardConfig:
     # Views captured by `scan.py calibrate-board`.
-    views: int = 16
+    views: int = 12
+    # Frames per board view (the depth check uses their median).
+    frames: int = 1
+    # Height above the board for the survey's head-on view: the whole 180 x 135mm
+    # board fits in the image's short side from about 250mm up.
+    view_height: float = 330.0
 
 
 @dataclass

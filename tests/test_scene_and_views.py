@@ -117,3 +117,19 @@ def test_config_rejects_unknown_settings(tmp_path):
         load_config(path)
     path.write_text("[views]\nstandoff = 300\n")
     assert load_config(path).views.standoff == 300
+
+
+def test_survey_follows_the_table_and_stops_at_its_edge():
+    from recon.pipeline import table_continues
+    from recon.scene import TablePlane
+    rng = np.random.default_rng(0)
+    plane = TablePlane(np.array([0.0, 0.0, 1.0]), 0.0)
+    # One overhead view centered at x=0: table out to x=120, floor (270mm lower) beyond it.
+    xy = rng.uniform([-240, -140], [240, 140], (20000, 2))
+    z = np.where(xy[:, 0] < 120, rng.normal(0, 1, len(xy)), -270.0)
+    points = np.column_stack([xy, z])
+    here = np.array([0.0, 0.0, 600.0])
+    assert table_continues(points, plane, here, np.array([-340.0, 0, 600]))  # more table that way
+    assert not table_continues(points, plane, here, np.array([340.0, 0, 600]))  # mostly floor that way
+    # Nothing in range at all (beyond the depth limit) doesn't count as table either.
+    assert not table_continues(points[xy[:, 1] < 0], plane, here, np.array([0.0, 340, 600]))

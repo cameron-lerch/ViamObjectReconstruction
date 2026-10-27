@@ -23,14 +23,15 @@ class FakeArm:
         return Joints()
 
 
-def guarded_robot(frame_system_cam: np.ndarray, controller_end: np.ndarray, mount: np.ndarray) -> Robot:
+def guarded_robot(frame_system_end: np.ndarray, controller_end: np.ndarray, mount: np.ndarray) -> Robot:
     robot = Robot.__new__(Robot)
     robot.config = Config()
     robot.arm = FakeArm(controller_end)
     robot._camera_mount = mount
 
     async def frame_pose(frame):
-        return frame_system_cam
+        assert frame == robot.config.machine.arm
+        return frame_system_end
 
     robot.frame_pose = frame_pose
     return robot
@@ -40,15 +41,14 @@ MOUNT = np.eye(4)
 MOUNT[:3, 3] = [83, -14, 18]
 
 
-def test_agreeing_poses_pass():
+def test_agreeing_poses_pass_and_give_the_camera_through_our_mount():
     end = look_at([150, -400, 500], [150, -400, 0])
-    camera = end @ MOUNT
-    assert np.allclose(asyncio.run(guarded_robot(camera, end, MOUNT).checked_camera_pose()), camera)
+    assert np.allclose(asyncio.run(guarded_robot(end, end, MOUNT).checked_camera_pose()), end @ MOUNT)
 
 
-def test_camera_rolled_180_degrees_is_caught():
+def test_arm_end_rolled_180_degrees_is_caught():
     end = look_at([150, -400, 500], [150, -400, 0])
-    reported = end @ MOUNT
-    reported[:3, :3] = reported[:3, :3] @ rotation_z(180)  # same position, image upside down
+    reported = end.copy()
+    reported[:3, :3] = reported[:3, :3] @ rotation_z(180)  # same position, wrist turned half a turn
     with pytest.raises(PoseMismatch, match="disagree"):
         asyncio.run(guarded_robot(reported, end, MOUNT).checked_camera_pose())

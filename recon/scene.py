@@ -1,14 +1,17 @@
 """Find the table plane and the objects standing on it in a world-frame point cloud."""
 
+import logging
 import math
 from dataclasses import dataclass
 
 import numpy as np
 import open3d as o3d
-from scipy.spatial import ConvexHull
+from scipy.spatial import ConvexHull, cKDTree
 
 from .config import WorkspaceConfig
 from .transforms import make_transform, rotation_z
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,6 +41,11 @@ class DetectedObject:
     size: np.ndarray  # box extents: length (along yaw), width, height
     yaw_deg: float
     n_points: int
+    color: tuple[float, float, float] | None = None  # median RGB (0-1) of its points
+
+    @property
+    def color_name(self) -> str:
+        return color_name(self.color) if self.color is not None else ""
 
     @property
     def top_z(self) -> float:
@@ -65,20 +73,22 @@ class DetectedObject:
         return np.all(np.abs(local) <= self.size / 2 + margin, axis=1)
 
     def moved_to(self, x: float, y: float) -> "DetectedObject":
-        return DetectedObject(self.id, np.array([x, y, self.center[2]]), self.size.copy(), self.yaw_deg, self.n_points)
+        return DetectedObject(self.id, np.array([x, y, self.center[2]]), self.size.copy(), self.yaw_deg, self.n_points, self.color)
 
     def to_dict(self) -> dict:
         return {"id": self.id, "center": self.center.tolist(), "size": self.size.tolist(),
-                "yaw_deg": self.yaw_deg, "n_points": self.n_points}
+                "yaw_deg": self.yaw_deg, "n_points": self.n_points, "color": self.color, "color_name": self.color_name}
 
     @classmethod
     def from_dict(cls, data: dict) -> "DetectedObject":
-        return cls(data["id"], np.array(data["center"]), np.array(data["size"]), data["yaw_deg"], data["n_points"])
+        color = tuple(data["color"]) if data.get("color") else None
+        return cls(data["id"], np.array(data["center"]), np.array(data["size"]), data["yaw_deg"], data["n_points"], color)
 
     def describe(self) -> str:
         x, y, z = self.center
         length, width, height = self.size
-        return (f"object {self.id}: center ({x:.0f}, {y:.0f}, {z:.0f}), "
+        named = f" ({self.color_name})" if self.color_name else ""
+        return (f"object {self.id}{named}: center ({x:.0f}, {y:.0f}, {z:.0f}), "
                 f"{length:.0f} x {width:.0f} x {height:.0f}mm, yaw {self.yaw_deg:.0f}deg")
 
 
@@ -149,15 +159,20 @@ def merge_fragments(clusters: list[np.ndarray]) -> list[np.ndarray]:
     return clusters
 
 
-def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceConfig) -> list[DetectedObject]:
+def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceConfig,
+                   colors: np.ndarray | None = None) -> list[DetectedObject]:
     heights = plane.height(points)
     keep = in_workspace(points, workspace) & (heights > workspace.min_object_height) & (heights < workspace.max_object_height)
-    cloud = to_cloud(points[keep]).voxel_down_sample(2.0)
+    cloud = to_cloud(points[keep])
+    if colors is not None:
+        cloud.colors = o3d.utility.Vector3dVector(colors[keep])
+    cloud = cloud.voxel_down_sample(2.0)
     if len(cloud.points) == 0:
         return []
     cloud, _ = cloud.remove_statistical_outlier(20, 2.0)
     labels = np.asarray(cloud.cluster_dbscan(workspace.cluster_distance, 10))
     candidates = np.asarray(cloud.points)
+    rgb = np.asarray(cloud.colors) if cloud.has_colors() else None
     objects = []
     for cluster in merge_fragments([candidates[labels == label] for label in range(labels.max() + 1)]):
         if len(cluster) < workspace.min_object_points:
@@ -165,16 +180,55 @@ def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceCo
         center_xy, extents, yaw = min_area_rectangle(cluster[:, :2])
         bottom = plane.z_at(*center_xy)
         top = float(np.percentile(cluster[:, 2], 98))
-        if top - bottom < workspace.min_object_top:
+        color = None
+        if rgb is not None:
+            # Colors of the candidate points that belong to this cluster.
+            _, nearest = cKDTree(candidates).query(cluster)
+            color = tuple(float(c) for c in np.median(rgb[nearest], axis=0))
+        candidate = DetectedObject(len(objects), np.array([*center_xy, (top + bottom) / 2]),
+                                   np.array([*extents, top - bottom]), yaw, len(cluster), color)
+        reason = not_a_target(candidate, points, heights, workspace)
+        if reason:
+            log.info("  skipped something at (%.0f, %.0f), %.0f x %.0f x %.0fmm: %s",
+                     *center_xy, *candidate.size, reason)
             continue
-        objects.append(DetectedObject(
-            id=len(objects),
-            center=np.array([*center_xy, (top + bottom) / 2]),
-            size=np.array([*extents, top - bottom]),
-            yaw_deg=yaw,
-            n_points=len(cluster),
-        ))
+        objects.append(candidate)
     return objects
+
+
+def table_support(obj: DetectedObject, points: np.ndarray, heights: np.ndarray, inner: float = 5.0,
+                  outer: float = 60.0, spacing: float = 5.0) -> float:
+    """Share of a ring around the object's footprint (from `inner` to `outer` mm out)
+    that is bare table: points within 5mm of the table plane.
+
+    Scan targets stand in open table. Cables at the table's edge or beside a power
+    strip, and things in a gap between tables, have floor, gaps or other things
+    around part of them.
+    """
+    table_xy = points[np.abs(heights) < 5.0][:, :2]
+    if len(table_xy) == 0:
+        return 0.0
+    half = obj.size[:2] / 2 + outer
+    u, v = np.meshgrid(np.arange(-half[0], half[0] + spacing, spacing), np.arange(-half[1], half[1] + spacing, spacing))
+    local = np.column_stack([u.ravel(), v.ravel()])
+    in_ring = np.any(np.abs(local) > obj.size[:2] / 2 + inner, axis=1)
+    c, s = np.cos(np.radians(obj.yaw_deg)), np.sin(np.radians(obj.yaw_deg))
+    ring = local[in_ring] @ np.array([[c, s], [-s, c]]) + obj.center[:2]
+    gaps, _ = cKDTree(table_xy).query(ring, distance_upper_bound=spacing)
+    return float(np.isfinite(gaps).mean())
+
+
+def not_a_target(obj: DetectedObject, points: np.ndarray, heights: np.ndarray, workspace: WorkspaceConfig) -> str:
+    """Why something on the table isn't a scan target ("" if it is one)."""
+    if obj.size[2] < workspace.min_object_top:
+        return f"under {workspace.min_object_top:.0f}mm tall (a cord or flat clutter)"
+    if obj.size[0] > workspace.max_object_size:
+        return f"over {workspace.max_object_size:.0f}mm across"
+    support = table_support(obj, points, heights, outer=workspace.clear_margin)
+    if support < workspace.min_table_support:
+        return (f"not in open table (only {support:.0%} of the {workspace.clear_margin:.0f}mm around it is bare table): "
+                "at an edge, in a gap, or beside something else")
+    return ""
 
 
 def merge_views(detections: list[tuple[np.ndarray, list[DetectedObject]]], gap: float = 15.0) -> list[DetectedObject]:
@@ -191,4 +245,17 @@ def merge_views(detections: list[tuple[np.ndarray, list[DetectedObject]]], gap: 
     for _, obj in ranked:
         if all(np.linalg.norm(obj.center[:2] - other.center[:2]) > other.footprint_radius + gap for other in kept):
             kept.append(obj)
-    return [DetectedObject(index, o.center, o.size, o.yaw_deg, o.n_points) for index, o in enumerate(kept)]
+    return [DetectedObject(index, o.center, o.size, o.yaw_deg, o.n_points, o.color) for index, o in enumerate(kept)]
+
+
+def color_name(rgb) -> str:
+    """A rough color name from RGB (0-1), for telling objects apart in the survey output."""
+    import colorsys
+    hue, saturation, value = colorsys.rgb_to_hsv(*rgb)
+    if saturation < 0.25:
+        return "white" if value > 0.75 else ("black" if value < 0.2 else "gray")
+    hue *= 360
+    for limit, name in ((8, "red"), (30, "orange"), (75, "yellow"), (170, "green"), (260, "blue"), (340, "purple")):
+        if hue < limit:
+            return name
+    return "red"

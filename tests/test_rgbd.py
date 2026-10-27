@@ -48,3 +48,13 @@ def test_save_and_load_view(tmp_path):
     np.testing.assert_array_equal(view.depth, depth)
     np.testing.assert_allclose(view.T_world_cam, pose)
     assert view.intrinsics == INTRINSICS and view.meta["joints_deg"] == [1, 2]
+
+
+def test_dropouts_are_not_edges_and_edges_can_be_widened():
+    depth = np.full((9, 9), 300, np.uint16)
+    depth[4, 4] = 0  # a dropout in a flat surface
+    assert not edge_mask(depth).any()
+    assert not edge_mask(depth, grow=3).any()
+    depth = np.full((5, 12), 300, np.uint16)
+    depth[:, 6:] = 500
+    assert edge_mask(depth, grow=2)[:, 3:9].all() and not edge_mask(depth, grow=2)[:, [0, 11]].any()
