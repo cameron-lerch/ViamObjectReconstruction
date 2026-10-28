@@ -1,0 +1,30 @@
+# Copy this folder for each printed object and fill this in. Lengths in mm.
+
+name = "stepped_cylinder"           # matches the folder and file names
+description = "Three stacked cylinders, 20/40/60mm across, 15mm tall each"
+
+[files]
+cad = "stepped_cylinder.step"
+mesh = "stepped_cylinder.stl"       # millimeters, same pose as the STEP file
+
+[placement]
+# Which face rests on the table, and whether the model has that face at z = 0 facing down.
+resting_face = "the 60mm cylinder's flat bottom"
+bottom_at_z0 = true
+
+[print]
+printer = ""
+material = "PLA"                    # matte and light colored works best for the depth camera
+color = "white"
+layer_height = 0.2
+nozzle = 0.4
+infill_percent = 20
+date = ""
+
+[measured]
+# Caliper measurements of the printed part (as in ground_truth.toml), to see how far
+# the print is from the CAD. Add whatever dimensions the object has.
+# height = 45.02
+# diameters = [20.05, 40.08, 60.11]
+
+notes = ""

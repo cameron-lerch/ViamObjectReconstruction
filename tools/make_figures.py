@@ -86,13 +86,13 @@ def calibration_figure(session: Session, object_id: int) -> None:
     after = reconstruct(calibrated, obj, plane, config)
     center, radius = framing(after.mesh)
     panels = []
-    for label, result in (("configured camera mount", before), ("calibrated camera mount", after)):
+    for label, result in (("uncalibrated", before), ("calibrated", after)):
         deviation = result.report["median_single_view_deviation_mm"]
         for az in (-60, 120):
             panels.append((render(result.observed, PANEL, 20, az, center, radius), label,
                            f"views deviate {deviation:.2f}mm (median)"))
-    figure("calibration_before_after", "Real cylinder, 25 views: camera mount as configured vs. calibrated", panels,
-           "Same 25 captures, same alignment and fusion; only the camera mount differs (21mm / 2.2° apart).")
+    figure("calibration_before_after", "Real cylinder, 25 views: uncalibrated vs. calibrated camera", panels,
+           "Same 25 captures, same alignment and fusion; only the camera mount differs (21mm / 2.2° apart). Uncalibrated is the mount entered by hand in the Viam app.")
 
 
 def alignment_figure(old_session: Session) -> None:

@@ -259,9 +259,20 @@ The same pipeline on rendered views of known shapes (`python scan.py demo --prog
 **Calibrating the camera mount.** The same 25 real captures, aligned and fused identically; only the camera mount differs:
 
 <p align="center">
-  <img src="media/images/calibration_before_after.png" alt="With the configured camera mount the 25 views smear into a T-shaped mess; with the calibrated mount they form a recognizable cylinder" width="900">
+  <img src="media/images/calibration_before_after.png" alt="Uncalibrated, the 25 views smear into a T-shaped mess; calibrated, they form a recognizable cylinder" width="900">
   <br><sub><b>REAL DATA.</b> The same 25 armfarm14 views of the green cylinder</sub>
 </p>
+
+"Uncalibrated" is the camera mount as it was first entered in the Viam app (measured by hand, 21mm and 2.2° from the calibrated one); these views were captured with it. Both rows include the alignment step, which can't rescue a mount that far off: it rejected 14 of the 25 views' corrections. Rebuilt from the same saved views:
+
+| Camera mount | Alignment | Views disagree by (median) | Diameter (calipers 29.53mm) | Roundness |
+|---|---|---|---|---|
+| Uncalibrated | off | 3.66mm | 57.05mm | 2.13mm |
+| Uncalibrated | on | 2.47mm | 52.87mm | 3.55mm |
+| Calibrated | off | 0.76mm | 30.87mm | 1.22mm |
+| Calibrated | on | 0.53mm | 32.22mm | 0.29mm |
+
+One open question: with the calibrated mount, turning alignment *off* gives a diameter 1.35mm closer to the calipers, though a far less round one. Whether alignment adds part of the size error is on the list to investigate.
 
 **Aligning all views together.** The same 37 synthetic views, aligned two ways:
 
@@ -445,11 +456,11 @@ and a depth reading $d$ at pixel $(u, v)$ is the point $\big((u - c_x)\,d / f_x,
 
 where $R_j$ is the rotation of $E_j M \Delta$ and $\rho$ is a robust (soft-L1) loss so that occasional bad matches don't dominate. Points come from the object and a 60mm ring of table (the table pins down height and tilt). The matches are recomputed as the estimate improves, with the match distance shrinking from 25mm to 3mm, and each round is solved with SciPy's `least_squares`.
 
-On the real cylinder's 25 views, the configured mount was off by 21mm and 2.2°:
+On the real cylinder's 25 views, the uncalibrated mount (as entered in the Viam app) was off by 21mm and 2.2°:
 
 | | Spread of table height across 25 views | Spread of the cylinder's top | Single views vs. fused surface |
 |---|---|---|---|
-| Configured mount | 20mm (std 6.0mm) | 21mm (std 6.1mm) | 2.48mm median |
+| Uncalibrated mount | 20mm (std 6.0mm) | 21mm (std 6.1mm) | 2.48mm median |
 | Calibrated mount | 4.4mm (std 1.0mm) | 5.0mm (std 1.1mm) | 0.52mm median |
 
 On synthetic data it recovers a known 12mm / 2° mount error to within 1.5mm / 0.3°.
@@ -581,6 +592,60 @@ The final `mesh.obj` is a screened Poisson surface fit through the observed surf
 | **Error vs. truth** | Distance from the mesh to the true shape after the best rigid fit, so it scores shape rather than placement. | Yes (synthetic) |
 
 Results go to `recon/progression/summary.csv`, with `mesh.obj` and `observed.obj` for each *k* and the first view's raw points.
+
+### 5.11 What can be tuned
+
+Every setting that changes how smooth and how accurate the final mesh is, in pipeline order. All are in [`recon/config.py`](recon/config.py) (overridable in `config.toml`) unless noted. "How chosen" says what each value rests on: **real** (measured on armfarm14 scans), **synthetic** (tuned on simulated scans), or **judgment** (a reasoned default, not tuned yet). Settings tied to the RealSense are marked †; they need testing again for another camera. Future tuning should use real scans, against the calipers and the 3D-printed objects' CAD.
+
+**Capture**
+
+| Setting | Now | What it trades | How chosen |
+|---|---|---|---|
+| `capture.frames_per_view` | 5 | More frames: less per-pixel noise (median), slower views | judgment |
+| `capture.settle_s` | 0.6s | Longer: less vibration blur, slower scans | judgment |
+| `views.standoff` † | 280mm + object radius | Closer: more pixels on the object and less noise (it grows with distance²), but the camera can't measure closer than about 260mm | judgment |
+| `views.elevations_deg`, `views.azimuth_step_deg`, `--max-views` | 25/50/72°, 30° (37 views) | More views: more averaging and coverage, longer scans | **real**: 16 spread views measured every side ([§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views)) |
+| RealSense presets and filters † | camera defaults | "High Accuracy" preset, spatial/temporal filters: smoother depth, fewer readings | not explored yet |
+
+**Cleaning each view**
+
+| Setting | Now | What it trades | How chosen |
+|---|---|---|---|
+| Edge thresholds † (`edge_mask` in `recon/rgbd.py`) | 5mm or 2% jump | Lower: drops more edge pixels (and steep surfaces) | judgment |
+| `reconstruct.edge_grow` † | 2px | Wider: removes more edge fattening, loses more wall data | **real**: 32.62 → 32.22mm diameter at 2px, nothing gained beyond |
+| `reconstruct.crop_margin`, `table_clearance` | 12mm, 2.5mm | What counts as the object in each view; too tight cuts it, too loose lets the table in | judgment, plus a real crop bug ([§8.2](#82-detection)) |
+
+**Aligning the views**
+
+| Setting | Now | What it trades | How chosen |
+|---|---|---|---|
+| `prior_translation_mm`, `prior_rotation_deg`, `prior_spin_deg` | 3mm, 1°, 0.3° | Looser: alignment corrects more, but can slide where the shape gives no grip | spin: **real**; others: judgment |
+| `icp_max_distance`, `icp_iterations`, `huber_mm`, `points_per_pair`, `min_pair_overlap`, `max_pair_angle_deg` | 3mm, 25, 1.5mm, 1500, 20%, 60° | Which view pairs are compared and how far apart matching points may be | **synthetic** |
+| `max_correction_mm`, `max_correction_deg` | 15mm, 5° | Larger corrections are rejected as failures | judgment |
+
+**Fusing (TSDF)**
+
+| Setting | Now | What it trades | How chosen |
+|---|---|---|---|
+| `reconstruct.voxel` † | 1.5mm | Smaller: finer detail and sharper edges, but fewer readings per voxel (noisier) and more memory | judgment |
+| `reconstruct.sdf_trunc` † | 6mm (4 voxels) | Wider: views that disagree still overlap and average (smoother), but thin parts and close surfaces blur together; narrower: sharper, but small misalignments leave holes or double walls | judgment |
+| `reconstruct.min_views` | 2 | Higher: only surface confirmed by more views (cleaner, more holes) | judgment |
+| Per-reading weights | all equal | Weighting by distance and viewing angle would trust grazing, distant readings less | not explored yet (README appendix) |
+
+**Extracting and smoothing**
+
+| Setting | Now | What it trades | How chosen |
+|---|---|---|---|
+| `reconstruct.smoothing_iterations` (Taubin) | 5 | More: smoother, but edges round off; 5-15 steps gave the same roughness | **real** |
+| `reconstruct.min_component_fraction` | 5% | Floating pieces smaller than this are dropped | judgment |
+
+**Closing the mesh** (`mesh.obj` only)
+
+| Setting | Now | What it trades | How chosen |
+|---|---|---|---|
+| `reconstruct.poisson_depth` | 9 | Higher: finer closed surface, larger file; 7-9 gave the same roughness | **real** |
+| `reconstruct.poisson_scale` | 3 | Working box size; too tight leaves few-view surfaces open | **synthetic** |
+| `reconstruct.footprint_shrink`, `base_band` | 1mm, 5mm | How the flat bottom and the flared base are handled | **real** (the base's flared pixels) |
 
 ---
 
@@ -830,6 +895,7 @@ scan.py                  command line: survey, plan, scan, calibrate, calibrate-
 config.toml              this cell's settings (address, workspace, survey grid, stations, calibration files)
 ground_truth.toml        caliper measurements of the test objects
 calibration/             calibrated camera mounts (used for every move and capture)
+  printed_objects/       3D-printed reference objects: CAD (STEP), printed mesh (STL), print details
 recon/
   config.py              every setting, with defaults and explanations
   robot.py               everything that talks to Viam: plan-only checks, moves, previews, pose guard, capture
@@ -976,3 +1042,67 @@ The next step is to scan the same objects with an Orbbec Astra 2, which is expec
 - **The Python SDK's connection check** uses a fixed 1s timeout, which closes healthy connections during large transfers. It should be configurable or skip while a call is streaming.
 - **`get_point_cloud()` over a cloud connection** dropped the connection at 1280×720; documenting a size limit, or a decimation option, would help.
 - **Once, the frame system reported a pose 180° off the arm's joints.** I couldn't reproduce it, but a built-in consistency check (frame system vs. controller) would be valuable on shared arms.
+
+---
+
+## Appendix (temporary): Research Notes on Reconstruction Methods
+
+*Working notes, gathered in October 2026, to guide what to try next; this section may be removed. The goal throughout: the most accurate 3D model possible from a noisy RGB-D camera. Every candidate should be judged on our real scans, against the calipers and, soon, against the CAD models of 3D-printed objects, not on synthetic data.*
+
+### What this project uses now, with the original papers
+
+| Step | Method | Paper / documentation |
+|---|---|---|
+| Fusing views | TSDF: a weighted average of each view's truncated signed distance in a voxel grid | Curless & Levoy, [A Volumetric Method for Building Complex Models from Range Images](https://graphics.stanford.edu/papers/volrange/) (SIGGRAPH 1996); the same idea run live in [KinectFusion](https://www.microsoft.com/en-us/research/publication/kinectfusion-real-time-dense-surface-mapping-tracking/) (ISMAR 2011) |
+| Observed mesh | Marching cubes at the TSDF's zero crossing | Lorensen & Cline, [Marching Cubes](https://doi.org/10.1145/37402.37422) (SIGGRAPH 1987) |
+| Closed mesh | Screened Poisson surface reconstruction | Kazhdan & Hoppe, [Screened Poisson Surface Reconstruction](https://hhoppe.com/proj/screenedpoisson/) (ACM TOG 2013), building on Kazhdan, Bolitho & Hoppe, [Poisson Surface Reconstruction](https://hhoppe.com/proj/poissonrecon/) (SGP 2006) |
+| Smoothing | Taubin λ\|μ smoothing: two Laplacian passes with opposite signs, so the surface doesn't shrink | Taubin, [A Signal Processing Approach to Fair Surface Design](https://doi.org/10.1145/218380.218473) (SIGGRAPH 1995; [PDF](https://faculty.cc.gatech.edu/~jarek/graphics/papers/09FairingTaubin.pdf)). Plain Laplacian smoothing, which shrinks, and its implicit form: Desbrun et al., [Implicit Fairing of Irregular Meshes](https://doi.org/10.1145/311535.311576) (SIGGRAPH 1999). Both are in [Open3D's mesh filtering](https://www.open3d.org/docs/release/tutorial/geometry/mesh.html) |
+
+### 1. Better depth before fusion (most promising for our size error)
+
+Our meshes are 3-4mm too wide while the views agree with each other, so the error is in the depth readings themselves, near edges and at grazing angles. Fixing the input is likely worth more than any meshing change.
+
+- **Weight each reading by how much to trust it.** Depth-camera noise grows with distance squared and sharply at grazing angles ([Nguyen, Izadi & Lovell, 3DIMPVT 2012](https://computer.org/csdl/proceedings-article/3dimpvt/2012/4873a524/12OmNAlvHUP), measured on the Kinect). TSDF systems use that as a per-reading weight: [Voxblox](https://arxiv.org/abs/1611.03631) weights by distance; a [directional TSDF](https://arxiv.org/abs/2301.12796) adds the viewing angle without per-sensor calibration. Our fusion weights every reading equally. **Cheap to try on our saved scans.**
+- **The camera's own processing.** Intel's [tuning guide](https://dev.intelrealsense.com/docs/tuning-depth-cameras-for-best-performance) covers presets ("High Accuracy"), spatial/temporal filters and the RMS error model (noise ∝ distance² / (focal length × baseline)). Needs new captures.
+- **Learned stereo on the RealSense's own infrared pair.** The RealSense computes depth by matching its two infrared images. [FoundationStereo](https://nvlabs.github.io/FoundationStereo) (NVIDIA, CVPR 2025, [arXiv](https://arxiv.org/abs/2501.09898)) is a zero-shot stereo model; its authors report it works on RealSense D4xx infrared pairs, with sharper edges than the onboard matcher. This attacks edge fattening at its source. Needs the infrared images captured (if the Viam camera module exposes them) and a GPU.
+- **Depth refinement with foundation-model priors.** [Prompt Depth Anything](https://arxiv.org/abs/2412.14015) (CVPR 2025) uses low-resolution metric depth as a "prompt" for a monocular depth model and outputs sharp, high-resolution metric depth; [Perfecting Depth](https://arxiv.org/abs/2506.04612) (2025) targets noisy sensor depth with uncertainty estimates to drop unreliable pixels. Both were trained on other sensors; whether they help a close-range RealSense needs testing.
+
+### 2. Fusion and surfaces beyond averaging
+
+- **Learned depth fusion.** [RoutedFusion](https://arxiv.org/abs/2001.04388) (CVPR 2020) and [NeuralFusion](https://arxiv.org/abs/2011.14791) (CVPR 2021) replace TSDF averaging with networks that learn a sensor's noise and outliers. They need training data from the sensor (our scans plus CAD ground truth could become that).
+- **Neural implicit surfaces from RGB-D.** [Neural RGB-D Surface Reconstruction](https://arxiv.org/abs/2104.04532) (CVPR 2022) stores the TSDF in a network and uses color to fill where depth is missing; [BundleSDF](https://arxiv.org/abs/2303.14158) (CVPR 2023) reconstructs a single unknown object from RGB-D video while tracking it, which matches our object-centered setting. Minutes of GPU training per object.
+- **Gaussian splatting surfaces.** The most active area: [2D Gaussian Splatting](https://arxiv.org/abs/2403.17888), [PGSR](https://github.com/zju3dv/PGSR) and Gaussian Opacity Fields report 0.5-0.8mm Chamfer error on the DTU benchmark (from images alone; numbers vary between papers). With depth: [DN-Splatter](https://arxiv.org/abs/2403.17822) (WACV 2025) found sensor depth a much stronger signal than monocular depth; [AGS-Mesh](https://arxiv.org/abs/2411.19271) filters noisy sensor depth by checking it against predicted normals. Most still extract meshes by TSDF fusion or Poisson at the end, so they would slot in ahead of our existing steps.
+- **Learned meshing from points.** [Neural Kernel Surface Reconstruction](https://research.nvidia.com/labs/toronto-ai/NKSR) (NVIDIA, CVPR 2023) is a drop-in alternative to Poisson for large, noisy point clouds.
+
+### 3. Smoothing and denoising
+
+- **Feature-preserving mesh denoising** smooths flat regions but keeps sharp edges, which Taubin and Laplacian smoothing round off (our blocks lose about one voxel at each edge). Bilateral normal filtering ([Zheng et al., 2011](https://i.cs.hku.hk/GraphicsGroup/publications/pdf/Feature-Preserving%20Mesh%20Denoising%20via%20Bilateral%20Normal%20Filtering.pdf)) and guided normal filtering are the standard choices; [this survey](https://arxiv.org/abs/2209.00841) (ACM TOMM 2023) compares geometric and learned methods.
+- **Point cloud denoising before meshing:** [Score-Based Point Cloud Denoising](https://arxiv.org/abs/2107.10981) (ICCV 2021) moves noisy points toward the most likely surface.
+- **Caution:** smoothing reduces roughness but can't fix a systematic offset (our walls being too far out); judge it against the calipers and CAD, not only roughness.
+
+### 4. Concave and convex shapes
+
+- **TSDF fusion already handles concavities**: it records free space in front of every reading, so a mug's cavity is carved out wherever a view sees into it. The limits are visibility and closing:
+  - **Visibility:** a cavity is only seen from views looking into its opening, at steep angles where depth is noisiest. That argues for next-best-view planning (aim views where the model is still unknown) over fixed rings.
+  - **Closing:** our flat-bottom, straight-wall closing assumes a solid; for a mug it would cap the opening. A visual hull (from silhouettes) can't help either: it is always the convex envelope ([space carving](https://doi.org/10.1023/A:1008191222954), Kutulakos & Seitz, IJCV 2000). Options: leave unseen regions open, or close only where views confirm the inside is empty.
+- **Shape completion** fills unseen parts (like the bottom) with learned priors: [RealDiff](https://arxiv.org/abs/2409.10180) (trained on real scans), [SC-Diff](https://arxiv.org/abs/2403.12470) (completes TSDFs), [ComPC](https://arxiv.org/abs/2404.06814) (ICLR 2025, no category training). Their output is a plausible guess, not a measurement, so it belongs in the "filled in" share, never the measured one.
+
+### 5. Using the color image to sharpen depth
+
+The color camera has no edge fattening: an object's outline in the color image is sharp to about a pixel, while the depth image pushes it outward by a few pixels. That suggests fusing the two:
+
+- **Object masks from a segmentation model.** [SAM 2](https://ai.meta.com/research/sam2/) (Meta, 2024, [paper](https://arxiv.org/abs/2408.00714)) outlines an object in an image from a single click or box (or follows it through a sequence of frames). We already know where each object is, so the scan could prompt it automatically.
+- **Silhouette carving.** With a mask per view, any voxel that projects *outside* the object's mask in some view must be empty space. That trims exactly the outward-bulging edge readings that make our meshes too wide, using views we already capture. It is the visual-hull idea ([§4 above](#4-concave-and-convex-shapes)) used as a check on the depth, not as the shape.
+- **Color-guided edge repair in each depth image.** Pixels that look alike in color are likely on the same surface: [Color-Guided Flying Pixel Correction](https://arxiv.org/abs/2410.08084) (2024) uses this to re-estimate flying pixels; classic joint bilateral and guided filters do the same more simply.
+- **Learned depth refinement from RGB:** [Prompt Depth Anything](https://arxiv.org/abs/2412.14015) and [Perfecting Depth](https://arxiv.org/abs/2506.04612) (§1 above) take color plus sensor depth and return sharper metric depth.
+- **What it depends on:** the depth and color images must line up to within a pixel or so. The RealSense aligns them itself; how well can be checked on our saved views at the board's corners.
+
+### 6. Suggested order, judged on real scans
+
+1. **Angle- and distance-weighted fusion** on the saved 34-view block and cylinder: offline, no new captures. Measure the width error against the calipers.
+2. **Feature-preserving denoising vs. Taubin** on the same scans.
+3. **Silhouette carving with object masks** (SAM 2 or a simpler color mask) on the same scans: no new captures, aimed straight at the size error.
+4. **Scan closer** (within the camera's minimum range) and try the RealSense presets/filters: new captures.
+5. **FoundationStereo on the infrared pair**: new captures and a GPU model.
+6. **Test on harder objects** (mug, bottle, pumpkin, tape roll, 3D-printed shapes) to see where the flat-bottom closing and the fixed rings break down.
+7. **A neural or Gaussian method** (BundleSDF, a depth-supervised 2DGS) as a heavier comparison, once the 3D-printed objects give exact ground truth.

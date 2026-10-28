@@ -8,3 +8,6 @@ __pycache__/
 
 # Captured views and meshes (large)
 data/
+
+# Working to-do list (not shared)
+TODO.md

@@ -142,6 +142,8 @@ def refine_poses(views: list[View], obj: DetectedObject, config: Config) -> tupl
             found = np.isfinite(distances)
             target_normals = normals[j][indices[found]] @ transforms[j][:3, :3].T
             source_normals = normals[i][samples[i][found]] @ transforms[i][:3, :3].T
+            # A match only counts if both normals point within 60deg of each other (cos 60deg = 0.5):
+            # points on the same side of the same surface, not the front and back of a thin part.
             agree = (target_normals * source_normals).sum(axis=1) > 0.5
             if agree.sum() < settings.min_pair_overlap * len(samples[i]):
                 pair_stats.pop((i, j), None)
