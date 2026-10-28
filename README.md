@@ -156,7 +156,7 @@ Every figure in this README is labeled under its caption: **REAL DATA** was capt
 
 ### 3.1 The latest scans: one view at a time, and 1 to 34 views
 
-The most complete real scans so far (session 20261028-093620): an orange block and a green cylinder, 34 views each, including the low 25° ring. Each column below is one view: the color image on top, and under it that view's depth as points with nothing removed (no edge filter, no outlier removal), all drawn from the same side-on direction. One view sees only the faces turned toward it; its walls are wavy and ribbed where they should be flat, the table shows depth "stair steps", and edges smear into the table. All 34 views placed by the arm's poses overlap into a fuzzy shell several millimeters thick; fusion turns that into the mesh at the bottom right.
+The most complete real scans so far (session 20261028-093620): an orange block and a green cylinder, 34 views each, including the low 25° ring. Each column below is one view: the color image on top, and under it that view's depth as points with nothing removed (no edge filter, no outlier removal), all drawn from the same side-on direction. Each color image is turned (in 90° steps) so the table is at the bottom, and the small arrows in each panel's corner show the world x, y and z axes (a circled dot is an axis pointing straight at the viewer, as z does in the views from directly above). One view sees only the faces turned toward it; its walls are wavy and ribbed where they should be flat, the table shows depth "stair steps", and edges smear into the table. All 34 views placed by the arm's poses overlap into a fuzzy shell several millimeters thick; fusion turns that into the mesh at the bottom right.
 
 <p align="center">
   <img src="media/images/raw_view_noise_object0.png" alt="Orange block: four views (top, and three at 25° from different sides) with the color image above and that view's raw points below; the points show wavy walls, holes and stair-stepped table. The last column overlays all 34 views as a fuzzy shell above the fused block mesh" width="1000">
@@ -586,6 +586,35 @@ Results go to `recon/progression/summary.csv`, with `mesh.obj` and `observed.obj
 ## 6. Measured vs. Filled In
 
 Every closed mesh is part measurement and part assumption. The **measured share** is the fraction of the closed mesh's surface area that lies within 2mm of a point the camera actually measured (fused from at least 2 views). The rest, shown in orange below, comes from the two priors in [§5.9](#59-closing-the-mesh-with-a-flat-bottom): the flat bottom and straight walls where nothing was seen.
+
+### 6.1 `observed.obj` vs. `mesh.obj`
+
+Every scan writes two meshes of each object (in `data/<session>/object_NN/recon/`), built from the same fused data:
+
+- **`observed.obj` is only what was measured.** It is the surface the TSDF fusion extracted where at least 2 views agreed ([§5.8](#58-fusing-the-views-tsdf)), and nothing else. Where the camera never looked it is simply open: there is no bottom (the object stands on it), and the red edges in the figure mark where measurement stops. Its bottom rim is ragged because the fusion keeps walls down to 2.5mm above the table and the views disagree a little on where that is.
+- **`mesh.obj` is the finished, closed model.** It adds the two assumptions of [§5.9](#59-closing-the-mesh-with-a-flat-bottom) (a flat bottom on the table, and straight walls down to it where unseen) and rebuilds one watertight surface through everything with screened Poisson reconstruction. Orange marks what was filled in rather than measured.
+
+<p align="center">
+  <img src="media/images/observed_vs_closed_block.png" alt="Orange block: observed.obj from the side and from below is open at the bottom with a ragged red-edged rim; mesh.obj from the side and below is closed, gray-blue on the walls and top, with an orange flat bottom" width="1000">
+  <br><sub><b>REAL DATA.</b> Orange block, 34 views, armfarm14, 2026-10-28</sub>
+</p>
+
+<p align="center">
+  <img src="media/images/observed_vs_closed_cylinder.png" alt="Green cylinder: observed.obj is an open tube with no bottom; mesh.obj is closed with an orange flat bottom" width="1000">
+  <br><sub><b>REAL DATA.</b> Green cylinder, 34 views, armfarm14, 2026-10-28</sub>
+</p>
+
+| | `observed.obj` | `mesh.obj` |
+|---|---|---|
+| What it contains | Measured surface only (seen by 2+ views) | Measured surface plus a flat bottom and straight-wall fill, as one surface |
+| Closed (watertight)? | No: open bottom, and holes wherever nothing was seen | Yes: has a volume, can be 3D printed or used for collision and grasp planning |
+| Block, 34 views | 9,561 triangles, 77cm² of surface, 0.7MB | 31,470 triangles, 91cm², 2.2MB, 86% on measured data |
+| Cylinder, 34 views | 8,312 triangles, 65cm², 0.6MB | 26,460 triangles, 76cm², 1.8MB, 87% on measured data |
+| Use it to | Judge what the camera actually captured, and measure accuracy without assumptions | Use the object: volume, simulation, printing, planning around it |
+
+Most of the difference in area (14cm² for the block, 11cm² for the cylinder) is the bottom, which the camera can never see. `mesh.obj` also has about three times as many triangles: Poisson builds its surface on a finer, uniform grid instead of reusing the fusion's triangles ([§9](#9-mesh-files-and-their-sizes)). Both are smoothed only lightly (5 Taubin steps on the observed surface, which barely change its size), so both keep the RealSense's few-tenths-of-a-millimeter ripples.
+
+### 6.2 How the measured share grows with views
 
 <p align="center">
   <img src="media/images/measured_vs_filled.png" alt="Closed meshes of the real cylinder from 3, 8 and 25 views, from the side and from below. With 3 views almost all of the walls and the bottom are orange (filled in); with 8, part of the walls is measured; with 25, most walls are measured and the bottom remains filled in" width="1000">

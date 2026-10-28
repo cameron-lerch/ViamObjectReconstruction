@@ -6,7 +6,9 @@ views of one object, next to all views together and the fused mesh (offscreen; n
 Each view's cloud is its saved depth (the per-pixel median of the frames captured
 at that pose) back-projected with nothing removed: no edge filter, no outlier
 removal. Every cloud is drawn from the same side-on direction, so the panels
-compare directly. Writes media/images/<--name>.svg (and .png with cairosvg).
+compare directly; each color image is turned (in 90° steps) so world up points
+up, like the renders, and every panel has a small world x/y/z axis triad. Writes
+media/images/<--name>.svg (and .png with cairosvg).
 """
 
 import argparse
@@ -25,11 +27,14 @@ from recon.rgbd import load_views, pixel_rays  # noqa: E402
 from recon.session import Session  # noqa: E402
 from recon.figures import png_base64, write_svg  # noqa: E402
 from recon.render import render, render_points  # noqa: E402
+from recon.transforms import look_at  # noqa: E402
 
 OUT = ROOT / "media" / "images"
 
 PANEL = 280
 SIDE_ELEVATION, SIDE_AZIMUTH = 15.0, -60.0  # how every cloud is drawn
+AXES = np.eye(3)  # world x, y, z
+AXIS_COLORS = ("#D64545", "#2F9E44", "#2F6FD6")
 
 
 def raw_points(view, obj, margin: float = 25.0):
@@ -44,21 +49,53 @@ def raw_points(view, obj, margin: float = 25.0):
     return points[near], colors[near]
 
 
-def color_crop(view, obj, pad: float = 0.6) -> np.ndarray:
-    """The color image around the object, square, scaled to PANEL."""
+def color_crop(view, obj, pad: float = 0.6) -> tuple[np.ndarray, np.ndarray]:
+    """The color image around the object, square, scaled to PANEL, and the world
+    axes as they appear in it (one 2D panel-pixel direction per row, y down)."""
     corners = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]) * obj.size / 2 + obj.center
     world_to_camera = np.linalg.inv(view.T_world_cam)
-    local = corners @ world_to_camera[:3, :3].T + world_to_camera[:3, 3]
     k = view.intrinsics
-    u = k.fx * local[:, 0] / local[:, 2] + k.cx
-    v = k.fy * local[:, 1] / local[:, 2] + k.cy
-    half = (1 + pad) * max(np.ptp(u), np.ptp(v)) / 2
-    cu, cv = u.mean(), v.mean()
+
+    def project(points):
+        local = points @ world_to_camera[:3, :3].T + world_to_camera[:3, 3]
+        return np.column_stack([k.fx * local[:, 0] / local[:, 2] + k.cx, k.fy * local[:, 1] / local[:, 2] + k.cy])
+
+    uv = project(corners)
+    half = (1 + pad) * max(np.ptp(uv[:, 0]), np.ptp(uv[:, 1])) / 2
+    cu, cv = uv.mean(axis=0)
     u0, v0 = int(max(0, cu - half)), int(max(0, cv - half))
     crop = view.color[v0 : int(min(k.height, cv + half)), u0 : int(min(k.width, cu + half))]
     rows = (np.arange(PANEL) * crop.shape[0] / PANEL).astype(int)
     cols = (np.arange(PANEL) * crop.shape[1] / PANEL).astype(int)
-    return np.ascontiguousarray(crop[rows][:, cols])
+    scale = np.array([PANEL / crop.shape[1], PANEL / crop.shape[0]])
+    ends = project(np.vstack([obj.center, obj.center + 30.0 * AXES]))
+    axes = (ends[1:] - ends[0]) * scale
+    return np.ascontiguousarray(crop[rows][:, cols]), axes
+
+
+def render_axes() -> np.ndarray:
+    """The world axes as they appear in the side-on point and mesh renders."""
+    a, e = np.radians(SIDE_AZIMUTH), np.radians(SIDE_ELEVATION)
+    direction = np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)])
+    rotation = look_at(direction, np.zeros(3))[:3, :3]  # columns: image right, image down, forward
+    return (AXES @ rotation)[:, :2]
+
+
+def turned(image: np.ndarray, axes: np.ndarray, quarter_turns: int) -> tuple[np.ndarray, np.ndarray]:
+    """The image turned counterclockwise in 90° steps, and its axis directions with it."""
+    for _ in range(quarter_turns % 4):
+        axes = np.column_stack([axes[:, 1], -axes[:, 0]])  # (right, down) -> (down, -right)
+    return np.ascontiguousarray(np.rot90(image, quarter_turns)), axes
+
+
+def match_turn(axes: np.ndarray) -> int:
+    """Quarter turns (counterclockwise) that make world up (+z) point up in the image, so
+    the table is at the bottom as in the renders. A view looking straight down has no
+    up in the picture (z points at the camera), so it isn't turned."""
+    z = axes[2]
+    if np.hypot(*z) < 0.3 * np.linalg.norm(axes, axis=1).max():
+        return 0
+    return int(np.argmax([-turned(np.zeros((1, 1, 3)), axes, k)[1][2, 1] for k in range(4)]))
 
 
 def pick_views(views, count: int):
@@ -73,8 +110,25 @@ def pick_views(views, count: int):
     return [views[k] for k in order]
 
 
-def grid_svg(name: str, title: str, columns: list[tuple[np.ndarray, np.ndarray, str, str]], note: str) -> None:
-    """Columns of (top image, bottom image, label, sub-label)."""
+def triad(x: float, y: float, axes: np.ndarray, length: float = 20.0) -> list[str]:
+    """SVG for small world x/y/z arrows from the bottom-left corner of a panel.
+    An axis pointing (nearly) straight at or away from the viewer is a dot or a cross in a circle."""
+    ox, oy = x + 26, y + PANEL - 26
+    longest = max(np.linalg.norm(axes, axis=1).max(), 1e-9)
+    parts = [f'<rect x="{x + 2}" y="{y + PANEL - 54}" width="52" height="52" rx="6" fill="#FFFFFF" fill-opacity="0.75"/>']
+    for (dx, dy), color, name in zip(axes / longest * length, AXIS_COLORS, "xyz"):
+        if np.hypot(dx, dy) < 0.3 * length:
+            parts.append(f'<circle cx="{ox}" cy="{oy}" r="5" fill="none" stroke="{color}" stroke-width="1.6"/>')
+            parts.append(f'<circle cx="{ox}" cy="{oy}" r="1.6" fill="{color}"/>')
+            parts.append(f'<text x="{ox + 7}" y="{oy + 12}" font-size="11" font-weight="700" fill="{color}">{name}</text>')
+            continue
+        parts.append(f'<line x1="{ox}" y1="{oy}" x2="{ox + dx:.1f}" y2="{oy + dy:.1f}" stroke="{color}" stroke-width="2" stroke-linecap="round"/>')
+        parts.append(f'<text x="{ox + 1.3 * dx:.1f}" y="{oy + 1.3 * dy + 4:.1f}" text-anchor="middle" font-size="11" font-weight="700" fill="{color}">{name}</text>')
+    return parts
+
+
+def grid_svg(name: str, title: str, columns: list[tuple], note: str) -> None:
+    """Columns of (top image, its axes, bottom image, its axes, label, sub-label)."""
     gap, top, bottom = 14, 52, 74
     width = len(columns) * PANEL + (len(columns) + 1) * gap
     height = top + 2 * PANEL + gap + bottom
@@ -82,12 +136,13 @@ def grid_svg(name: str, title: str, columns: list[tuple[np.ndarray, np.ndarray, 
              'font-family="Liberation Sans, Arial, Helvetica, sans-serif">',
              f'<rect width="{width}" height="{height}" rx="14" fill="#FFFFFF"/>',
              f'<text x="{width / 2}" y="32" text-anchor="middle" font-size="22" font-weight="700" fill="#1F2933">{title}</text>']
-    for index, (upper, lower, label, sub) in enumerate(columns):
+    for index, (upper, upper_axes, lower, lower_axes, label, sub) in enumerate(columns):
         x = gap + index * (PANEL + gap)
-        for row, image in enumerate((upper, lower)):
+        for row, (image, axes) in enumerate(((upper, upper_axes), (lower, lower_axes))):
             y = top + row * (PANEL + gap)
             parts.append(f'<image x="{x}" y="{y}" width="{PANEL}" height="{PANEL}" href="data:image/png;base64,{png_base64(image)}"/>')
             parts.append(f'<rect x="{x}" y="{y}" width="{PANEL}" height="{PANEL}" fill="none" stroke="#CBD2D9"/>')
+            parts += triad(x, y, axes)
         y = top + 2 * PANEL + gap
         parts.append(f'<text x="{x + PANEL / 2}" y="{y + 22}" text-anchor="middle" font-size="16" font-weight="700" fill="#1F2933">{label}</text>')
         parts.append(f'<text x="{x + PANEL / 2}" y="{y + 42}" text-anchor="middle" font-size="13" fill="#52606D">{sub}</text>')
@@ -114,12 +169,17 @@ def main() -> None:
     def side(points, colors=None):
         return render_points(points, PANEL, SIDE_ELEVATION, SIDE_AZIMUTH, center, radius, dot=1, colors=colors)
 
+    side_axes = render_axes()
     columns = []
     for view in pick_views(views, args.views):
         points, colors = raw_points(view, obj)
         elevation = view.meta.get("elevation_deg", 90.0)
         azimuth = view.meta.get("azimuth_deg", 0.0)
-        columns.append((color_crop(view, obj), side(points, colors),
+        image, axes = color_crop(view, obj)
+        quarter_turns = match_turn(axes)
+        image, axes = turned(image, axes, quarter_turns)
+        print(f"  {view.name}: color image turned {90 * quarter_turns} deg counterclockwise")
+        columns.append((image, axes, side(points, colors), side_axes,
                         f"{elevation:.0f}° up, {azimuth:.0f}° around", f"{len(points):,} raw points"))
 
     clouds = [raw_points(view, obj) for view in views]
@@ -133,11 +193,11 @@ def main() -> None:
     else:
         fused = np.full((PANEL, PANEL, 3), 255, np.uint8)
         fused_label = "(run reconstruct for the fused mesh)"
-    columns.append((side(everything[shown]), fused, f"All {len(views)} views together",
+    columns.append((side(everything[shown]), side_axes, fused, side_axes, f"All {len(views)} views together",
                     f"{len(everything) / 1e6:.1f}M points; {fused_label}"))
     named = f" ({obj.color_name})" if obj.color_name else ""
     grid_svg(args.name, f"What the RealSense gives us, one view at a time: object {args.object}{named}",
-             columns, "Top: the color image. Bottom: that view's depth as points, unfiltered, all drawn from the same side-on direction.")
+             columns, "Top: the color image, turned so the table is at the bottom. Bottom: that view's depth as points, unfiltered, all drawn from the same side-on direction.")
 
 
 if __name__ == "__main__":
