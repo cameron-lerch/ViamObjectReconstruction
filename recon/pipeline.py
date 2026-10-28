@@ -14,7 +14,7 @@ from .board import BoardSpec, depth_model, detect, hand_eye, locate_flat
 from .calibrate import MountCalibration, apply_mount, calibrate_mount
 from .config import Config
 from .figures import doubling_counts, progression_figure
-from .planner import ScanPlan, plan_scan
+from .planner import ScanPlan, plan_scan, spread_views
 from .progression import progression
 from .reconstruct import reconstruct, save_reconstruction
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
@@ -316,8 +316,11 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
     session.write_json(session.object_dir(obj.id) / "scanned_object.json", target.to_dict())
 
     world_state = robot.world_state([target, *others], config.views.object_margin)
-    # Views run top first, then ring by ring downward, so a limited run keeps to the high views.
-    for index, view in enumerate(plan.views[:max_views]):
+    # With max_views, a subset spread over all directions (not just the first, highest views).
+    views = spread_views(plan.views, max_views)
+    if max_views is not None:
+        log.info("  capturing %d of %d planned views, spread over all directions", len(views), len(plan.views))
+    for index, view in enumerate(views):
         try:
             await robot.move(config.machine.camera, view.T_world_cam, world_state)
         except Exception as error:  # the planner can still fail on a path it approved from elsewhere
@@ -326,7 +329,7 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
         await capture_view(robot, session.views_dir(obj.id) / f"view_{index:03d}", {
             "azimuth_deg": view.candidate.azimuth_deg, "elevation_deg": view.candidate.elevation_deg,
             "roll_deg": view.roll_deg, "commanded_T_world_cam": view.T_world_cam.tolist()})
-        log.info("  captured view %d/%d (%s)", index + 1, len(plan.views[:max_views]), view.candidate.describe())
+        log.info("  captured view %d/%d (%s)", index + 1, len(views), view.candidate.describe())
 
     if job is not None and config.relocate.return_after_scan:
         back = await plan_pick_and_place(robot, target, obj, others, config)

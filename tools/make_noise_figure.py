@@ -51,7 +51,8 @@ def raw_points(view, obj, margin: float = 25.0):
 
 def color_crop(view, obj, pad: float = 0.6) -> tuple[np.ndarray, np.ndarray]:
     """The color image around the object, square, scaled to PANEL, and the world
-    axes as they appear in it (one 2D panel-pixel direction per row, y down)."""
+    axes as they appear in it: per axis, its panel-pixel direction (right, down)
+    and how much it points away from the viewer."""
     corners = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]) * obj.size / 2 + obj.center
     world_to_camera = np.linalg.inv(view.T_world_cam)
     k = view.intrinsics
@@ -69,8 +70,9 @@ def color_crop(view, obj, pad: float = 0.6) -> tuple[np.ndarray, np.ndarray]:
     cols = (np.arange(PANEL) * crop.shape[1] / PANEL).astype(int)
     scale = np.array([PANEL / crop.shape[1], PANEL / crop.shape[0]])
     ends = project(np.vstack([obj.center, obj.center + 30.0 * AXES]))
-    axes = (ends[1:] - ends[0]) * scale
-    return np.ascontiguousarray(crop[rows][:, cols]), axes
+    flat = (ends[1:] - ends[0]) * scale
+    away = AXES @ world_to_camera[:3, :3].T[:, 2]  # + = pointing away from the camera
+    return np.ascontiguousarray(crop[rows][:, cols]), np.column_stack([flat, away * np.linalg.norm(flat, axis=1).max()])
 
 
 def render_axes() -> np.ndarray:
@@ -78,13 +80,13 @@ def render_axes() -> np.ndarray:
     a, e = np.radians(SIDE_AZIMUTH), np.radians(SIDE_ELEVATION)
     direction = np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)])
     rotation = look_at(direction, np.zeros(3))[:3, :3]  # columns: image right, image down, forward
-    return (AXES @ rotation)[:, :2]
+    return AXES @ rotation  # right, down, away from the viewer
 
 
 def turned(image: np.ndarray, axes: np.ndarray, quarter_turns: int) -> tuple[np.ndarray, np.ndarray]:
     """The image turned counterclockwise in 90° steps, and its axis directions with it."""
     for _ in range(quarter_turns % 4):
-        axes = np.column_stack([axes[:, 1], -axes[:, 0]])  # (right, down) -> (down, -right)
+        axes = np.column_stack([axes[:, 1], -axes[:, 0], axes[:, 2]])  # (right, down) -> (down, -right)
     return np.ascontiguousarray(np.rot90(image, quarter_turns)), axes
 
 
@@ -92,8 +94,8 @@ def match_turn(axes: np.ndarray) -> int:
     """Quarter turns (counterclockwise) that make world up (+z) point up in the image, so
     the table is at the bottom as in the renders. A view looking straight down has no
     up in the picture (z points at the camera), so it isn't turned."""
-    z = axes[2]
-    if np.hypot(*z) < 0.3 * np.linalg.norm(axes, axis=1).max():
+    z = axes[2, :2]
+    if np.hypot(*z) < 0.3 * np.linalg.norm(axes[:, :2], axis=1).max():
         return 0
     return int(np.argmax([-turned(np.zeros((1, 1, 3)), axes, k)[1][2, 1] for k in range(4)]))
 
@@ -110,20 +112,62 @@ def pick_views(views, count: int):
     return [views[k] for k in order]
 
 
-def triad(x: float, y: float, axes: np.ndarray, length: float = 20.0) -> list[str]:
-    """SVG for small world x/y/z arrows from the bottom-left corner of a panel.
-    An axis pointing (nearly) straight at or away from the viewer is a dot or a cross in a circle."""
-    ox, oy = x + 26, y + PANEL - 26
+def triad(x: float, y: float, axes: np.ndarray, box: float = 64.0, margin: float = 8.0) -> list[str]:
+    """SVG for a small world x/y/z axis marker in a box in the panel's bottom-left
+    corner. Arrows keep their relative lengths (a short one points toward or away
+    from the viewer); one pointing nearly straight at the viewer, as z does in a
+    view from directly above, is a circled dot, and one pointing nearly straight
+    away is a circled cross. Everything stays inside the box."""
+    left, top = x + margin, y + PANEL - margin - box
+    away = axes[:, 2]
+    axes = axes[:, :2]
     longest = max(np.linalg.norm(axes, axis=1).max(), 1e-9)
-    parts = [f'<rect x="{x + 2}" y="{y + PANEL - 54}" width="52" height="52" rx="6" fill="#FFFFFF" fill-opacity="0.75"/>']
-    for (dx, dy), color, name in zip(axes / longest * length, AXIS_COLORS, "xyz"):
-        if np.hypot(dx, dy) < 0.3 * length:
-            parts.append(f'<circle cx="{ox}" cy="{oy}" r="5" fill="none" stroke="{color}" stroke-width="1.6"/>')
-            parts.append(f'<circle cx="{ox}" cy="{oy}" r="1.6" fill="{color}"/>')
-            parts.append(f'<text x="{ox + 7}" y="{oy + 12}" font-size="11" font-weight="700" fill="{color}">{name}</text>')
-            continue
-        parts.append(f'<line x1="{ox}" y1="{oy}" x2="{ox + dx:.1f}" y2="{oy + dy:.1f}" stroke="{color}" stroke-width="2" stroke-linecap="round"/>')
-        parts.append(f'<text x="{ox + 1.3 * dx:.1f}" y="{oy + 1.3 * dy + 4:.1f}" text-anchor="middle" font-size="11" font-weight="700" fill="{color}">{name}</text>')
+    reach = box - 30  # longest arrow; leaves room for the labels inside the box
+    while True:
+        # Center the drawing (origin, arrow tips and labels) in the box.
+        ends = np.vstack([np.zeros(2), axes / longest * reach * 1.35])
+        if np.ptp(ends, axis=0).max() <= box - 14 or reach < 10:
+            break
+        reach -= 1
+    ox, oy = np.array([left, top]) + box / 2 - (ends.min(axis=0) + ends.max(axis=0)) / 2
+    parts = [f'<rect x="{left}" y="{top}" width="{box}" height="{box}" rx="8" fill="#FFFFFF" fill-opacity="0.85" stroke="#CBD2D9"/>']
+    origin = np.array([ox, oy])
+    arrows = []  # (axis index, tip, unit direction) for arrows; (axis index, None, None) for a dot
+    for k, (dx, dy) in enumerate(axes / longest * reach):
+        size = np.hypot(dx, dy)
+        arrows.append((k, None, None) if size < 0.4 * reach else (k, origin + [dx, dy], np.array([dx, dy]) / size))
+    segments = [(origin, tip) for _, tip, _ in arrows if tip is not None]
+
+    def clearance(point, placed):
+        """How far a label at `point` is from every arrow and every placed label."""
+        gaps = [np.linalg.norm(point - other) - 11 for other in placed] + [np.linalg.norm(point - origin) - 9]
+        for start, end in segments:
+            t = np.clip((point - start) @ (end - start) / max((end - start) @ (end - start), 1e-9), 0, 1)
+            gaps.append(np.linalg.norm(point - (start + t * (end - start))) - 7)
+        return min(gaps)
+
+    low, high = np.array([left + 7, top + 9]), np.array([left + box - 7, top + box - 7])
+    placed = []
+    for k, tip, unit in arrows:
+        color, name = AXIS_COLORS[k], "xyz"[k]
+        if tip is None:
+            parts.append(f'<circle cx="{ox:.1f}" cy="{oy:.1f}" r="5.5" fill="#FFFFFF" stroke="{color}" stroke-width="1.8"/>')
+            if away[k] < 0:  # toward the viewer: a dot (an arrow's point)
+                parts.append(f'<circle cx="{ox:.1f}" cy="{oy:.1f}" r="1.8" fill="{color}"/>')
+            else:  # away: a cross (an arrow's tail feathers)
+                parts.append(f'<path d="M{ox - 3:.1f},{oy - 3:.1f} L{ox + 3:.1f},{oy + 3:.1f} M{ox - 3:.1f},{oy + 3:.1f} L{ox + 3:.1f},{oy - 3:.1f}" stroke="{color}" stroke-width="1.6"/>')
+            candidates = [origin + offset for offset in ([10, -10], [-10, -10], [10, 10], [-10, 10])]
+        else:
+            head = [tip, tip - 6 * unit + 3.5 * np.array([-unit[1], unit[0]]), tip - 6 * unit - 3.5 * np.array([-unit[1], unit[0]])]
+            line_end = tip - 5 * unit
+            parts.append(f'<line x1="{ox:.1f}" y1="{oy:.1f}" x2="{line_end[0]:.1f}" y2="{line_end[1]:.1f}" stroke="{color}" stroke-width="2.2" stroke-linecap="round"/>')
+            parts.append(f'<polygon points="{" ".join(f"{px:.1f},{py:.1f}" for px, py in head)}" fill="{color}"/>')
+            side = np.array([-unit[1], unit[0]])
+            candidates = [tip + 9 * unit, tip + 9 * side, tip - 9 * side, tip + 6 * unit + 8 * side, tip + 6 * unit - 8 * side]
+        candidates = [np.clip(c, low, high) for c in candidates]
+        best = next((c for c in candidates if clearance(c, placed) >= 0), max(candidates, key=lambda c: clearance(c, placed)))
+        placed.append(best)
+        parts.append(f'<text x="{best[0]:.1f}" y="{best[1] + 4:.1f}" text-anchor="middle" font-size="11" font-weight="700" fill="{color}">{name}</text>')
     return parts
 
 

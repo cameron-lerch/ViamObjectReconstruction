@@ -61,3 +61,24 @@ async def plan_scan(robot: Robot, obj: DetectedObject, others: list[DetectedObje
         previous = result
     plan.coverage = coverage(aim_point(obj, config.views), [v.candidate.eye for v in plan.views], config.views)
     return plan
+
+
+def spread_views(views: list[PlannedView], count: int | None) -> list[PlannedView]:
+    """`count` of the views spread as evenly as possible over the viewing directions:
+    the most overhead first, then each next one farthest (in direction) from those
+    already chosen. They keep their planned (travel) order. All of them without a count.
+
+    On the real block and cylinder, 16 of 34 views spread like this already measured
+    every side and the top; more views mostly reduce noise (README section 3.1).
+    """
+    if count is None or count >= len(views):
+        return list(views)
+    directions = np.array([(v.candidate.eye - v.candidate.target) / np.linalg.norm(v.candidate.eye - v.candidate.target)
+                           for v in views])
+    chosen = [int(np.argmax(directions[:, 2]))]
+    while len(chosen) < count:
+        nearest = np.max(directions @ directions[chosen].T, axis=1)  # cosine to the closest chosen view
+        nearest[chosen] = np.inf
+        chosen.append(int(np.argmin(nearest)))
+    return [views[k] for k in sorted(chosen)]
+

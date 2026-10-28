@@ -81,12 +81,14 @@ def progression_figure(folder: Path, svg: Path, title: str, counts: list[int],
     for k in counts:
         observed = o3d.io.read_triangle_mesh(str(folder / f"views_{k:02d}" / "observed.ply"))
         row = rows[str(k)]
-        sub = (f"{row.get('completeness', 0):.0%} seen, roughness {row['roughness_mm']:.2f}mm"
-               if row.get("roughness_mm") == row.get("roughness_mm") and row.get("roughness_mm") is not None else "nothing seen")
+        # The measured share (of the closed mesh's surface) is on one scale for every
+        # count; completeness is relative to the all-views scan and always ends at 100%.
+        sub = (f"{row['measured_share']:.0%} of surface measured, roughness {row['roughness_mm']:.2f}mm"
+               if row.get("roughness_mm") == row.get("roughness_mm") and row.get("roughness_mm") is not None else "nothing measured")
         panels.append((render(observed, PANEL, elevation, azimuth, center, radius), f"{k} view{'s' if k > 1 else ''}: observed", sub))
     cloud = np.asarray(o3d.io.read_triangle_mesh(str(folder / f"views_{last:02d}" / "observed.ply")).vertices)
     panels.append((render(color_measured(closed, cloud), PANEL, elevation, azimuth, center, radius, use_colors=True),
-                   f"{last} views: closed", f"{rows[str(last)]['measured_share']:.0%} measured (orange = filled in)"))
+                   f"{last} views: closed", f"{rows[str(last)]['measured_share']:.0%} measured; orange = filled in"))
     row_figure(svg, title, panels, "Observed meshes: 1 view keeps all it saw; 2+ views keep surface at least 2 of them agree on. Red lines mark open edges.")
 
 

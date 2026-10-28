@@ -294,7 +294,7 @@ def main() -> None:
     parser.add_argument("--confirm-moves", action="store_true", help="show and confirm every single arm move")
     parser.add_argument("--confirm-above", type=float, metavar="DEG",
                         help="show every move, but only ask when some joint turns at least DEG degrees")
-    parser.add_argument("--max-views", type=int, help="scan: capture only the first N views of each object (top first)")
+    parser.add_argument("--max-views", type=int, help="scan: capture only N of each object's views, spread over all directions (16 measured every side of the test blocks)")
     parser.add_argument("--reuse-survey", action="store_true", help="scan: use the latest survey instead of surveying again")
     parser.add_argument("--objects", type=object_list, help="object ids from the survey, e.g. 0,2 (default: all)")
     parser.add_argument("--new-survey", action="store_true", help="plan: survey again instead of using the latest")
