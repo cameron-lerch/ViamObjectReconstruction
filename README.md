@@ -29,19 +29,21 @@ pip install -r requirements.txt
 
 Put the machine's API key in `apikey.json` as `{"key": "...", "key_id": "..."}` and its address in `config.toml`.
 
-**2. Calibrate** (once per setup, with the ChArUco mat on the table; nothing moves without `--execute`)
+**2. Calibrate** (once per setup, with the ChArUco mat on the table)
 
 ```bash
-python scan.py calibrate-board --execute --save-mount   # finds the mat and calibrates the camera
-python scan.py survey --execute                         # maps the table
-python scan.py touch-off --execute                      # at the arm, with a sheet of paper
+python calibration.py
 ```
+
+It asks once before the arm moves, then finds the mat and calibrates the camera, surveys the table, and asks whether to run the touch-off (you at the arm, with a sheet of paper). `python calibration.py --plan-only` plans every step without moving.
 
 **3. Scan**
 
 ```bash
-python scan.py scan --execute     # finds the objects on the table and scans each one
+python scan.py
 ```
+
+It asks once before the arm moves, surveys the table, lists the objects it found (with their centers, sizes and colors), and asks before scanning each one. When it's done, the arm parks over the mat and every mesh and figure is built. `python scan.py --plan-only` plans without moving; `--max-views 16` scans in about half the time.
 
 **4. Results** are in `data/<session>/object_NN/`: `recon/mesh.obj` (the closed model), `recon/observed.obj` (only what was measured) and `progression.png` (the model from 1 to all views). Open the meshes in Blender; units are millimeters, so scale the import by 0.001.
 
@@ -252,7 +254,7 @@ The same pipeline on rendered views of known shapes (`python scan.py demo --prog
 | Calibrated | off | 0.76mm | 30.87mm | 1.22mm |
 | Calibrated | on | 0.53mm | 32.22mm | 0.29mm |
 
-One open question: with the calibrated mount, turning alignment *off* gives a diameter 1.35mm closer to the calipers, though a far less round one. Whether alignment adds part of the size error is on the list to investigate.
+One open question: with the calibrated mount, turning alignment *off* gives a diameter 1.35mm closer to the calipers, though a far less round one. On the 34-view scans of [§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views) the picture is mixed: without alignment the cylinder is 1.1mm closer (31.14 vs. 32.28mm), but the block gets one side closer and the other farther (31.82 × 35.40mm vs. 33.50 × 33.77mm), and the views disagree almost twice as much (about 1.0mm vs. 0.57mm). Alignment is not the main source of the size error, but how it moves round objects is worth a closer look.
 
 **Aligning all views together.** The same 37 synthetic views, aligned two ways:
 
@@ -837,7 +839,7 @@ The [Quick Start](#quick-start) runs everything with defaults. These are the sam
 - `--confirm-above 45` only waits when a joint would turn 45° or more;
 - `--step` asks before each object.
 
-**Calibrating, with a plan-only look first:**
+**Calibrating one step at a time.** `calibration.py` runs these three steps in order; separately, each can be planned first and watched move by move:
 
 ```bash
 python scan.py calibrate-board                        # find the mat from where the camera is and plan its views (no motion)
@@ -847,7 +849,7 @@ python scan.py touch-off                              # plan only: check the 3 t
 python scan.py touch-off --execute                    # with you at the arm and a sheet of paper
 ```
 
-**Scanning in stages.** A **survey** finds what's on the table and where; a **scan** builds each object's mesh. `scan --execute` alone runs its own survey first. To check the survey (and the plan) before scanning, run them separately and scan with `--reuse-survey`:
+**Scanning in stages.** `python scan.py` runs the whole scan. A **survey** finds what's on the table and where; a **scan** builds each object's mesh. `scan --execute` alone runs its own survey first. To check the survey (and the plan) before scanning, run them separately and scan with `--reuse-survey`:
 
 ```bash
 python scan.py survey --execute                       # overhead views across the table; prints each object's id, center and color
@@ -867,7 +869,7 @@ python scan.py progression --objects 1                # meshes, metrics and prog
 **Without a robot:**
 
 ```bash
-python -m pytest                                      # 52 tests, about 80s
+python -m pytest                                      # 61 tests, about 80s
 python scan.py demo --progression                     # synthetic table scene: survey, plan, render noisy views, reconstruct, score
 ```
 
@@ -875,6 +877,8 @@ python scan.py demo --progression                     # synthetic table scene: s
 
 | Command | Moves the arm? | What it does |
 |---|---|---|
+| `calibration.py [--plan-only] [--touch-off ask\|yes\|no]` | yes (asks first) | The whole calibration: camera (board), table (survey), gripper (touch-off, asks first) |
+| `scan.py [--plan-only] [--max-views K]` | yes (asks first) | The whole scan: survey, list the objects, ask before each, scan, park over the mat, build meshes and figures, compare with the calipers where possible |
 | `scan.py survey [--execute]` | with `--execute` | Overhead grid over the table: objects, table plane, calibration board (then a head-on board view); without `--execute`, from the current pose |
 | `scan.py plan [--new-survey]` | no | Reachable views, coverage and relocation decision per object |
 | `scan.py scan --execute [--objects N] [--max-views K] [--reuse-survey]` | yes | Plan, (relocate), capture every object, return home over the mat, then build each mesh and its progression figure. `--max-views K` captures K views spread over all directions (16 is enough to measure every side of the test blocks) |
@@ -891,7 +895,7 @@ Motion options: `--confirm-moves` previews every move (target, joint changes) an
 
 ### 10.5 Testing
 
-`python -m pytest` runs 52 tests, about 80s. Besides unit tests (pose math against the machine's own numbers, depth decoding, edge filtering, detection, view geometry, grasp poses, the pose guard, ChArUco detection and hand-eye recovery of a known mount), several run the pipeline on synthetic scenes and check it against the truth: fused meshes beat single views, mount calibration recovers a known error, closed meshes have the right volume, and the progression improves with views.
+`python -m pytest` runs 61 tests, about 80s. Besides unit tests (pose math against the machine's own numbers, depth decoding, edge filtering, detection, view geometry, grasp poses, the pose guard, ChArUco detection and hand-eye recovery of a known mount), several run the pipeline on synthetic scenes and check it against the truth: fused meshes beat single views, mount calibration recovers a known error, closed meshes have the right volume, and the progression improves with views.
 
 ---
 
@@ -914,6 +918,7 @@ The armfarm cells are shared and remote, so the code assumes that nobody may be 
 ## 12. Repository Structure
 
 ```
+calibration.py           the whole calibration in one command: camera, table, gripper
 scan.py                  command line: survey, plan, scan, calibrate, calibrate-board, reconstruct, progression, demo
 config.toml              this cell's settings (address, workspace, survey grid, stations, calibration files)
 ground_truth.toml        caliper measurements of the test objects
@@ -942,7 +947,7 @@ tools/
   make_figures.py        this README's result figures
   make_noise_figure.py   one view at a time: color image and raw points per view
   make_tsdf_diagram.py   the fusion diagram
-tests/                   52 tests, mostly against synthetic ground truth
+tests/                   61 tests, mostly against synthetic ground truth
 media/                   diagrams (SVG + PNG) and figures
 ```
 

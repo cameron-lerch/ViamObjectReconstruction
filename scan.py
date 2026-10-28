@@ -1,7 +1,11 @@
 ''' Scan the objects on the table and build a 3D mesh of each.
 
-The arm only moves when you pass --execute. Without it, commands look and plan
-from wherever the arm is now.
+    python scan.py                  # the whole scan: asks once before the arm moves, then before each object
+    python scan.py --plan-only      # survey from where the camera is and plan every object (no motion)
+    python scan.py --max-views 16   # about half the time: 16 views per object, spread over all directions
+
+The steps on their own, for troubleshooting (the arm only moves with --execute;
+without it, they look and plan from wherever the arm is now):
 
     python scan.py survey                 # find the table and objects from the current pose
     python scan.py plan                   # reachable views and coverage per object (no motion)
@@ -52,15 +56,16 @@ def object_list(text: str) -> list[int]:
     return [int(v) for v in text.split(",")]
 
 
-async def run_robot(args, config: Config) -> None:
+async def with_robot(config: Config, steps, confirm_moves: bool = False, confirm_above: float | None = None) -> None:
+    ''' Connect, check the arm's pose, run `steps(robot)`, and stop safely on any interruption. '''
     machine = await connect(config)
     async with machine:
         robot = Robot(machine, config)
-        robot.confirm_moves = args.confirm_moves or args.confirm_above is not None
-        robot.confirm_above_deg = args.confirm_above
+        robot.confirm_moves = confirm_moves or confirm_above is not None
+        robot.confirm_above_deg = confirm_above
         try:
             await robot.checked_camera_pose()
-            await run_steps(robot, args, config)
+            await steps(robot)
         except MoveDeclined as declined:
             log.info("Stopped: %s. The arm is where it was before that move.", declined)
         except PoseMismatch as mismatch:
@@ -72,46 +77,70 @@ async def run_robot(args, config: Config) -> None:
             raise
 
 
+async def run_robot(args, config: Config) -> None:
+    await with_robot(config, lambda robot: run_steps(robot, args, config), args.confirm_moves, args.confirm_above)
+
+
+async def touch_off_step(robot: Robot, config: Config, execute: bool, session: Session | None = None) -> dict | None:
+    ''' Touch-off on a survey's table (the latest survey unless `session` is given); saves the result. '''
+    session = session or Session.latest(config.resolve(config.data_dir))
+    objects, plane = session.load_scene()
+    robot.set_scene(plane, session.load_clutter())
+    board = session.read().get("board")
+    log.info("Using the survey in %s", session.root)
+    survey_points = pipeline.scene_points(sorted(session.survey_dir.glob("view_*")), config)
+    result = await touch_off(robot, objects, plane, config, execute, board["center"] if board else None, survey_points)
+    if result:
+        path = config.resolve(config.machine.touch_off_file or "calibration/touch_off.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result | {"session": session.root.name}, indent=2) + "\n")
+        log.info("Fingertips reach %.1fmm past the gripper frame (spread %.1fmm over %d spots); the collision model says %.1fmm.",
+                 result["reach_mm"], result["reach_spread_mm"], len(result["points"]), result["modeled_reach_mm"])
+        if result["extra_reach_mm"] > 0:
+            log.info("The real fingertips reach %.1fmm further than the model: every plan now adds that to the table margin.",
+                     result["extra_reach_mm"])
+        else:
+            log.info("The model covers the real fingertips; the table margin stays at %.0fmm.", config.workspace.table_safety_margin)
+        tilt = result["table_vs_camera"]
+        if tilt:
+            log.info("The table the arm touched vs the camera's table: tilted %.2fdeg (%.2fmm per 100mm); the reach spread above includes this.",
+                     tilt["tilt_deg"], tilt["tilt_mm_per_100mm"])
+        log.info("Saved to %s", path)
+    return result
+
+
+async def board_step(robot: Robot, config: Config, execute: bool, save_mount: bool) -> dict | None:
+    ''' Calibrate the camera with the ChArUco board (starting from where the last survey saw it, if any). '''
+    known = None
+    try:
+        board = Session.latest(config.resolve(config.data_dir)).read().get("board")
+        known = np.array(board["center"]) if board else None
+    except FileNotFoundError:
+        pass
+    session = Session.create(config.resolve(config.data_dir), "board-" + time.strftime("%Y%m%d-%H%M%S"))
+    result = await pipeline.board_calibration(robot, session, config, execute, known_center=known)
+    if result:
+        report_board(result, session)
+        if save_mount:
+            path = pipeline.save_mount(config, np.array(result["board_mount"]), f"board calibration, {session.root.name}")
+            log.info("Saved as the camera mount for all moves and captures: %s", path)
+    return result
+
+
+async def survey_step(robot: Robot, config: Config, execute: bool):
+    ''' A new survey session: the table, the objects on it and the board. Returns (session, objects, plane). '''
+    session = Session.create(config.resolve(config.data_dir))
+    log.info("Session %s", session.root)
+    objects, plane = await pipeline.survey(robot, session, config, execute)
+    return session, objects, plane
+
+
 async def run_steps(robot: Robot, args, config: Config) -> None:
     if args.command == "touch-off":
-        session = Session.latest(config.resolve(config.data_dir))
-        objects, plane = session.load_scene()
-        robot.set_scene(plane, session.load_clutter())
-        board = session.read().get("board")
-        log.info("Using the survey in %s", session.root)
-        survey_points = pipeline.scene_points(sorted(session.survey_dir.glob("view_*")), config)
-        result = await touch_off(robot, objects, plane, config, args.execute, board["center"] if board else None, survey_points)
-        if result:
-            path = config.resolve(config.machine.touch_off_file or "calibration/touch_off.json")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(result | {"session": session.root.name}, indent=2) + "\n")
-            log.info("Fingertips reach %.1fmm past the gripper frame (spread %.1fmm over %d spots); the collision model says %.1fmm.",
-                     result["reach_mm"], result["reach_spread_mm"], len(result["points"]), result["modeled_reach_mm"])
-            if result["extra_reach_mm"] > 0:
-                log.info("The real fingertips reach %.1fmm further than the model: every plan now adds that to the table margin.",
-                         result["extra_reach_mm"])
-            else:
-                log.info("The model covers the real fingertips; the table margin stays at %.0fmm.", config.workspace.table_safety_margin)
-            tilt = result["table_vs_camera"]
-            if tilt:
-                log.info("The table the arm touched vs the camera's table: tilted %.2fdeg (%.2fmm per 100mm); the reach spread above includes this.",
-                         tilt["tilt_deg"], tilt["tilt_mm_per_100mm"])
-            log.info("Saved to %s", path)
+        await touch_off_step(robot, config, args.execute)
         return
     if args.command == "calibrate-board":
-        known = None
-        try:
-            board = Session.latest(config.resolve(config.data_dir)).read().get("board")
-            known = np.array(board["center"]) if board else None
-        except FileNotFoundError:
-            pass
-        session = Session.create(config.resolve(config.data_dir), "board-" + time.strftime("%Y%m%d-%H%M%S"))
-        result = await pipeline.board_calibration(robot, session, config, args.execute, known_center=known)
-        if result:
-            report_board(result, session)
-            if args.save_mount:
-                path = pipeline.save_mount(config, np.array(result["board_mount"]), f"scan.py calibrate-board, {session.root.name}")
-                log.info("Saved as the camera mount for all moves and captures: %s", path)
+        await board_step(robot, config, args.execute, args.save_mount)
         return
     reuse = (args.command == "plan" and not args.new_survey) or (args.command == "scan" and args.reuse_survey)
     if reuse:
@@ -120,9 +149,7 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
         robot.set_scene(plane, session.load_clutter())
         log.info("Using survey from %s", session.root)
     else:
-        session = Session.create(config.resolve(config.data_dir))
-        log.info("Session %s", session.root)
-        objects, plane = await pipeline.survey(robot, session, config, args.execute)
+        session, objects, plane = await survey_step(robot, config, args.execute)
     if args.command == "survey":
         return
     for obj in selected(objects, args.objects):
@@ -149,6 +176,68 @@ def viam_frame(mount: np.ndarray) -> str:
     return ('  "translation": {"x": %.2f, "y": %.2f, "z": %.2f},\n'
             '  "orientation": {"type": "ov_degrees", "value": {"x": %.5f, "y": %.5f, "z": %.5f, "th": %.3f}}'
             % (x, y, z, o_x, o_y, o_z, theta))
+
+
+def describe_for_person(obj) -> str:
+    x, y, _ = obj.center
+    length, width, height = obj.size
+    color = f"{obj.color_name}, " if obj.color_name else ""
+    return f"object {obj.id}: {color}{length:.0f} x {width:.0f} x {height:.0f}mm, centered at ({x:.0f}, {y:.0f})"
+
+
+def ask_object(obj) -> str:
+    ''' 'y' (scan it), 'n' (skip), 'a' (scan this and all the rest without asking) or 'q' (stop). '''
+    while True:
+        answer = input(f"Scan {describe_for_person(obj)}? [Enter = yes, n = skip, a = all the rest, q = stop] ").strip().lower()
+        if answer in ("", "y", "yes"):
+            return "y"
+        if answer in ("n", "a", "q"):
+            return answer
+        print("  Please type Enter, n, a or q.")
+
+
+async def scan_everything(robot: Robot, config: Config, execute: bool, max_views: int | None,
+                          truth_file: str = "ground_truth.toml") -> None:
+    ''' Survey, list what's on the table, scan each object (asking first), park the arm,
+    then build every mesh and figure and compare with the calipers where possible. '''
+    session, objects, plane = await survey_step(robot, config, execute)
+    if not objects:
+        log.info("No objects to scan on the table. (Things too low, or not standing in open table, are skipped; see the survey output above.)")
+        return
+    log.info("\nFound %d object(s) to scan:", len(objects))
+    for obj in objects:
+        log.info("  %s", describe_for_person(obj))
+
+    scanned, ask_each = [], True
+    for obj in objects:
+        others = [o for o in objects if o.id != obj.id]
+        if not execute:
+            plan, job, station_plan = await pipeline.plan_object(robot, obj, others, config)
+            pipeline.save_plan(session, obj, plan, job, station_plan)
+            continue
+        answer = await asyncio.to_thread(ask_object, obj) if ask_each else "y"
+        if answer == "q":
+            break
+        if answer == "n":
+            continue
+        if answer == "a":
+            ask_each = False
+        log.info("\nScanning %s", describe_for_person(obj))
+        await pipeline.scan_object(robot, session, obj, others, plane, config, execute, False, max_views)
+        scanned.append(obj)
+    if not execute:
+        log.info("\nPlanned only (nothing moved). Run python scan.py to scan.")
+        return
+
+    await pipeline.go_home(robot, session, config)
+    # Meshes, figures and comparisons after the arm is parked: they take a while and need no robot.
+    truth = load_truth(config.resolve(truth_file))
+    for obj in scanned:
+        log.info("\nBuilding object %d's meshes and figures", obj.id)
+        pipeline.finish_object(session, obj.id, plane, config)
+        compare_object(session, obj, truth, truth_file)
+    log.info("\nDone: %d object(s) scanned. Results in %s/object_NN/ (recon/mesh.obj, recon/observed.obj, progression.png)",
+             len(scanned), session.root)
 
 
 def report_board(result: dict, session: Session) -> None:
@@ -194,31 +283,37 @@ def run_reconstruct(args, config: Config) -> None:
             pipeline.reconstruct_object(session, obj.id, plane, config, refine=not args.no_refine)
 
 
+def compare_object(session: Session, obj, truth: dict, truth_file: str, name: str | None = None) -> dict | None:
+    ''' Measure an object's mesh like calipers would and compare it with the ground-truth
+    entry it resembles (or `name`). Returns the errors, or None if nothing to compare. '''
+    folder = session.recon_dir(obj.id)
+    if not (folder / "mesh.ply").exists():
+        return None
+    mesh = o3d.io.read_triangle_mesh(str(folder / "mesh.ply"))
+    if name is None:
+        name, _, why = identify(mesh, truth)
+        if name is None:
+            log.info("Object %d %s: no similar object in %s, so no caliper comparison", obj.id, why, truth_file)
+            return None
+        log.info("Object %d %s: comparing with %s", obj.id, why, name)
+    entry = truth[name]
+    measured = measure(mesh, entry["shape"])
+    rows = compare(measured, entry)
+    lines = [f"  {key:9s} {got:7.2f}mm  vs {want:6.2f}mm  {error:+6.2f}mm ({100 * error / want:+.1f}%)"
+             for key, got, want, error in rows]
+    log.info("Object %d vs %s (calipers):\n%s", obj.id, name, "\n".join(lines))
+    errors = {key: error for key, _, _, error in rows}
+    session.write_json(folder / "accuracy.json", {"truth": name, "measured": measured, "errors": errors})
+    return errors
+
+
 def run_compare(args, config: Config) -> None:
     ''' Measure reconstructed meshes like calipers would and compare them with ground_truth.toml. '''
     truth = load_truth(config.resolve(args.truth_file))
     session = Session(args.session) if args.session else Session.latest(config.resolve(config.data_dir))
     objects, _ = session.load_scene()
     for obj in selected(objects, args.objects):
-        folder = session.recon_dir(obj.id)
-        if not (folder / "mesh.ply").exists():
-            continue
-        mesh = o3d.io.read_triangle_mesh(str(folder / "mesh.ply"))
-        name = args.truth
-        if name is None:
-            name, _, why = identify(mesh, truth)
-            if name is None:
-                log.info("Object %d %s: no similar object in %s; skipped", obj.id, why, args.truth_file)
-                continue
-            log.info("Object %d %s: comparing with %s", obj.id, why, name)
-        entry = truth[name]
-        measured = measure(mesh, entry["shape"])
-        rows = compare(measured, entry)
-        lines = [f"  {key:9s} {got:7.2f}mm  vs {want:6.2f}mm  {error:+6.2f}mm ({100 * error / want:+.1f}%)"
-                 for key, got, want, error in rows]
-        log.info("Object %d vs %s (calipers):\n%s", obj.id, name, "\n".join(lines))
-        session.write_json(folder / "accuracy.json", {"truth": name, "measured": measured,
-                                                      "errors": {key: error for key, _, _, error in rows}})
+        compare_object(session, obj, truth, args.truth_file, args.truth)
 
 
 def run_progression(args, config: Config) -> None:
@@ -287,7 +382,9 @@ def run_demo(config: Config, with_progression: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["survey", "plan", "scan", "calibrate", "calibrate-board", "touch-off", "reconstruct", "progression", "compare", "demo"])
+    parser.add_argument("command", nargs="?", choices=["survey", "plan", "scan", "calibrate", "calibrate-board", "touch-off", "reconstruct", "progression", "compare", "demo"],
+                        help="one step on its own (leave out for the whole scan)")
+    parser.add_argument("--plan-only", action="store_true", help="the whole scan: survey from where the camera is and plan, without moving")
     parser.add_argument("--config", default="config.toml")
     parser.add_argument("--execute", action="store_true", help="allow the arm to move")
     parser.add_argument("--step", action="store_true", help="confirm before each object and each relocation")
@@ -319,7 +416,14 @@ def main() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
     config = load_config(args.config)
 
-    if args.command == "demo":
+    if args.command is None:
+        execute = not args.plan_only
+        if execute and input("The arm will move to survey the table, then scan each object you choose "
+                             "(about 15 minutes each; Ctrl+C or the e-stop stops it). Start? [y/N] ").strip().lower() not in ("y", "yes"):
+            return
+        asyncio.run(with_robot(config, lambda robot: scan_everything(robot, config, execute, args.max_views, args.truth_file),
+                               args.confirm_moves, args.confirm_above))
+    elif args.command == "demo":
         run_demo(config, args.progression)
     elif args.command == "progression":
         run_progression(args, config)
