@@ -1,5 +1,5 @@
-"""The scanning workflow: survey the table, plan each object's views, move it if
-needed, capture stop-and-go views, and reconstruct."""
+''' The scanning workflow: survey the table, plan each object's views, move it if
+needed, capture stop-and-go views, and reconstruct. '''
 
 import asyncio
 import json
@@ -52,8 +52,8 @@ def scene_points(folders, config: Config) -> np.ndarray:
 
 
 async def go_home(robot: Robot, session: Session, config: Config) -> None:
-    """Park the camera straight above the calibration mat at survey height (a pose
-    like every survey view), so each run ends in the same, known-safe place."""
+    ''' Park the camera straight above the calibration mat at survey height (a pose
+    like every survey view), so each run ends in the same, known-safe place. '''
     board = session.read().get("board")
     if not board:
         log.info("No calibration mat in this session's survey; leaving the arm where it is")
@@ -64,10 +64,10 @@ async def go_home(robot: Robot, session: Session, config: Config) -> None:
 
 
 def survey_grid(config: Config) -> dict[tuple[int, int], np.ndarray]:
-    """Overhead camera positions over the search region, keyed by (column, row), skipping
+    ''' Overhead camera positions over the search region, keyed by (column, row), skipping
     only positions right over the arm's base (the camera may look at table near the
     base: the scan targets aren't there, but their surroundings and obstacles can be).
-    With `[workspace] survey_positions` set, those are used instead."""
+    With `[workspace] survey_positions` set, those are used instead. '''
     workspace = config.workspace
     if workspace.survey_positions:
         return {(k, 0): np.array(p, dtype=float) for k, p in enumerate(workspace.survey_positions)}
@@ -85,15 +85,17 @@ def survey_grid(config: Config) -> dict[tuple[int, int], np.ndarray]:
 
 def table_continues(points: np.ndarray, plane: TablePlane, here: np.ndarray, toward: np.ndarray,
                     min_share: float = 0.3) -> bool:
-    """Whether the part of this view facing a neighboring position still shows table.
+    ''' Whether the part of this view facing a neighboring position still shows table.
 
     Looks at the strip of points beyond a quarter of the way to the neighbor:
     floor, walls or nothing at all (out of depth range) don't count as table.
-    """
+    '''
     direction = (toward - here)[:2]
     distance = np.linalg.norm(direction)
     along = (points[:, :2] - here[:2]) @ (direction / distance)
     strip = points[along > 0.25 * distance]
+    # Thresholds from README section 5.1 (judgment, checked on armfarm14): at least 500
+    # points to judge by, and table means within 10mm of the first view's plane.
     if len(strip) < 500:
         return False
     on_table = np.abs(plane.height(strip)) < 10
@@ -101,8 +103,8 @@ def table_continues(points: np.ndarray, plane: TablePlane, here: np.ndarray, tow
 
 
 async def survey_table(robot: Robot, session: Session, config: Config) -> list:
-    """Overhead views that follow the table: start over it, and only go on to a
-    neighboring grid position if this view's side facing it still shows table."""
+    ''' Overhead views that follow the table: start over it, and only go on to a
+    neighboring grid position if this view's side facing it still shows table. '''
     cells = survey_grid(config)
     reachable = {}
     for key, (x, y, z) in cells.items():
@@ -146,10 +148,10 @@ async def survey_table(robot: Robot, session: Session, config: Config) -> list:
 
 
 async def survey(robot: Robot, session: Session, config: Config, execute: bool) -> tuple[list[DetectedObject], TablePlane]:
-    """Look straight down across the table (following it from where the camera is,
+    ''' Look straight down across the table (following it from where the camera is,
     or, with motion off, only from where the camera is now), then find the table, the
     objects on it and the calibration board. With motion on, finish with a head-on
-    view of the board."""
+    view of the board. '''
     if execute:
         folders = await survey_table(robot, session, config)
     else:
@@ -205,7 +207,7 @@ async def survey(robot: Robot, session: Session, config: Config, execute: bool) 
 
 
 def find_board(folders, spec: BoardSpec):
-    """The best view of the board among `folders`: (board pose lying flat, detection, tilt)."""
+    ''' The best view of the board among `folders`: (board pose lying flat, detection, tilt). '''
     best = None
     for folder in folders:
         view = load_view(folder)
@@ -221,7 +223,7 @@ def find_board(folders, spec: BoardSpec):
 
 
 async def view_board_head_on(robot: Robot, session: Session, config: Config, center: np.ndarray) -> dict:
-    """Look straight down at the board's center so all of it is in view, and check it."""
+    ''' Look straight down at the board's center so all of it is in view, and check it. '''
     spec = BoardSpec()
     if not await move_camera_looking_down(robot, center[0], center[1], center[2] + config.board.view_height):
         return {}
@@ -245,8 +247,8 @@ async def view_board_head_on(robot: Robot, session: Session, config: Config, cen
 
 async def locate_near(robot: Robot, x: float, y: float, plane: TablePlane, session: Session, object_id: int,
                       config: Config) -> DetectedObject:
-    """Look straight down at (x, y) and return the object found closest to it."""
-    height = plane.z_at(x, y) + config.views.standoff + 200
+    ''' Look straight down at (x, y) and return the object found closest to it. '''
+    height = plane.z_at(x, y) + config.views.standoff + 200  # 200mm higher: sees the whole station area
     if not await move_camera_looking_down(robot, x, y, height):
         raise RuntimeError("Cannot look at the scan station")
     folder = await capture_view(robot, session.object_dir(object_id) / "located")
@@ -266,14 +268,14 @@ async def confirm(prompt: str) -> bool:
 
 async def plan_object(robot: Robot, obj: DetectedObject, others: list[DetectedObject],
                       config: Config) -> tuple[ScanPlan, PickAndPlace | None, ScanPlan | None]:
-    """Plan views in place; if coverage is too low, plan a move to a better station."""
+    ''' Plan views in place; if coverage is too low, plan a move to a better station. '''
     plan = await plan_scan(robot, obj, others, config)
     log.info("Object %d in place: %s", obj.id, plan.summary())
     if plan.coverage >= config.views.min_coverage or not config.relocate.enabled:
         return plan, None, None
     log.info("  coverage below %.0f%%; looking for a scan station", config.views.min_coverage * 100)
     station, station_plan = await choose_station(robot, obj, others, config)
-    if station is None or station_plan.coverage <= plan.coverage + 0.05:
+    if station is None or station_plan.coverage <= plan.coverage + 0.05:  # worth a move only for 5+ points more
         log.info("  no station improves coverage; scanning in place")
         return plan, None, None
     job = await plan_pick_and_place(robot, obj, station, others, config)
@@ -340,7 +342,7 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
 
 
 def scanned_object(session: Session, object_id: int) -> DetectedObject:
-    """The object as it was when scanned (it may have been moved to a station)."""
+    ''' The object as it was when scanned (it may have been moved to a station). '''
     objects, _ = session.load_scene()
     scanned = session.object_dir(object_id) / "scanned_object.json"
     return (DetectedObject.from_dict(json.loads(scanned.read_text())) if scanned.exists()
@@ -348,7 +350,7 @@ def scanned_object(session: Session, object_id: int) -> DetectedObject:
 
 
 def calibrate_session(session: Session, object_id: int, config: Config) -> MountCalibration:
-    """Estimate the camera mount from one object's views and save it with the session."""
+    ''' Estimate the camera mount from one object's views and save it with the session. '''
     views = load_views(session.views_dir(object_id))
     mounts = {json.dumps(v.meta["camera_mount"]) for v in views if "camera_mount" in v.meta}
     if len(mounts) > 1:
@@ -364,7 +366,7 @@ def calibrate_session(session: Session, object_id: int, config: Config) -> Mount
 
 
 def apply_session_calibration(session: Session, views: list) -> list:
-    """Recompute camera poses with the session's calibrated mount, when there is one."""
+    ''' Recompute camera poses with the session's calibrated mount, when there is one. '''
     path = session.root / CALIBRATION_FILE
     if not path.exists():
         return views
@@ -391,8 +393,8 @@ def reconstruct_object(session: Session, object_id: int, plane: TablePlane, conf
 
 def progression_snapshot(session: Session, object_id: int, plane: TablePlane, config: Config,
                          refine: bool = True) -> Path:
-    """Meshes from 1, 2, 4, ... all views (spread out) and a figure of them, saved with
-    the object's results: object_NN/progression.svg (and .png)."""
+    ''' Meshes from 1, 2, 4, ... all views (spread out) and a figure of them, saved with
+    the object's results: object_NN/progression.svg (and .png). '''
     obj = scanned_object(session, object_id)
     views = apply_session_calibration(session, load_views(session.views_dir(object_id)))
     folder = session.recon_dir(object_id) / "progression"
@@ -406,16 +408,16 @@ def progression_snapshot(session: Session, object_id: int, plane: TablePlane, co
 
 
 def finish_object(session: Session, object_id: int, plane: TablePlane, config: Config, refine: bool = True) -> None:
-    """Everything offline after an object's views are captured: its mesh, then the
-    progression figure."""
+    ''' Everything offline after an object's views are captured: its mesh, then the
+    progression figure. '''
     reconstruct_object(session, object_id, plane, config, refine)
     progression_snapshot(session, object_id, plane, config, refine)
 
 
 async def search_for_board(robot: Robot, session: Session, config: Config, spec: BoardSpec,
                            search: bool) -> np.ndarray | None:
-    """Where the board is, roughly, from color-only views (about 0.15s each): first from
-    where the camera is, then (with `search`) from the survey grid, nearest first."""
+    ''' Where the board is, roughly, from color-only views (about 0.15s each): first from
+    where the camera is, then (with `search`) from the survey grid, nearest first. '''
     async def look(name: str):
         folder = await capture_view(robot, session.root / "board" / name, frames=1, depth=False)
         view = load_view(folder)
@@ -440,13 +442,13 @@ async def search_for_board(robot: Robot, session: Session, config: Config, spec:
 
 async def board_calibration(robot: Robot, session: Session, config: Config, execute: bool,
                             spec: BoardSpec | None = None, known_center: np.ndarray | None = None) -> dict | None:
-    """Hand-eye calibration and a depth check with a ChArUco board lying on the table.
+    ''' Hand-eye calibration and a depth check with a ChArUco board lying on the table.
 
     Locates the board (from the survey's `known_center`, or from where the camera is
     now), plans views of it from several distances and directions (plan-only), and
     with `execute` captures them and solves for the camera mount and the depth
     sensor's error.
-    """
+    '''
     spec = spec or BoardSpec()
     if known_center is None:
         known_center = await search_for_board(robot, session, config, spec, execute)
@@ -476,6 +478,9 @@ async def board_calibration(robot: Robot, session: Session, config: Config, exec
                  len(found.ids), found.reprojection_px, tilt, *center)
 
     camera = config.machine.camera
+    # Candidate board views: 3 distances that keep the 180 x 135mm board well inside the
+    # image, steep enough elevations that every corner is seen, every 60deg around.
+    # Judgment; the hand-eye solve wants varied rotations more than many views.
     poses = []
     for distance in (300.0, 380.0, 460.0):
         for elevation in (62.0, 75.0, 88.0):
@@ -491,6 +496,8 @@ async def board_calibration(robot: Robot, session: Session, config: Config, exec
     # Spread the chosen views out: farthest-first over camera position and viewing direction.
     chosen = [reachable[0]] if reachable else []
     while reachable and len(chosen) < min(config.board.views, len(reachable)):
+        # 100mm between cameras counts as much as about 37deg between viewing directions
+        # ((1 - cos 37deg) x 5 = 1): both matter for hand-eye calibration.
         score = [min(np.linalg.norm(p[:3, 3] - c[:3, 3]) / 100 + (1 - p[:3, 2] @ c[:3, 2]) * 5 for c in chosen)
                  for p in reachable]
         chosen.append(reachable[int(np.argmax(score))])
@@ -514,7 +521,7 @@ async def board_calibration(robot: Robot, session: Session, config: Config, exec
         found_views.append(found)
         ends.append(board_view.T_world_cam @ np.linalg.inv(mount))
         log.info("  view %d/%d: %d corners, %.2fpx", index + 1, len(chosen), len(found.ids), found.reprojection_px)
-    if len(found_views) < 5:
+    if len(found_views) < 5:  # hand-eye needs several distinct rotations; 5 is a floor
         raise RuntimeError(f"Only {len(found_views)} usable board views")
     calibrated, T_world_board, diagnostics = hand_eye(ends, found_views, views[0].intrinsics.matrix, mount)
     result = {"original_mount": mount.tolist(), "board_mount": calibrated.tolist(), "board_pose": T_world_board.tolist(),
@@ -524,7 +531,7 @@ async def board_calibration(robot: Robot, session: Session, config: Config, exec
 
 
 def save_mount(config: Config, mount: np.ndarray, source: str) -> Path:
-    """Make `mount` the camera mount used for every move and capture."""
+    ''' Make `mount` the camera mount used for every move and capture. '''
     if not config.machine.camera_mount_file:
         raise ValueError("Set [machine] camera_mount_file in config.toml first")
     path = config.resolve(config.machine.camera_mount_file)

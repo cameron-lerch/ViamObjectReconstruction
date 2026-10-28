@@ -1,4 +1,4 @@
-"""Flat-bottom closing and the 1..n view progression, on synthetic data."""
+''' Flat-bottom closing and the 1..n view progression, on synthetic data. '''
 
 import numpy as np
 import open3d as o3d

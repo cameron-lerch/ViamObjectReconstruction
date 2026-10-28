@@ -1,4 +1,4 @@
-"""Touch-off geometry: the gripper points straight down, the model's reach, and safe contact spots."""
+''' Touch-off geometry: the gripper points straight down, the model's reach, and safe contact spots. '''
 
 import asyncio
 

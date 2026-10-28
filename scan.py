@@ -1,4 +1,4 @@
-"""Scan the objects on the table and build a 3D mesh of each.
+''' Scan the objects on the table and build a 3D mesh of each.
 
 The arm only moves when you pass --execute. Without it, commands look and plan
 from wherever the arm is now.
@@ -13,7 +13,7 @@ from wherever the arm is now.
     python scan.py progression --objects 1  # meshes and metrics from 1, 2, ... n views
     python scan.py compare --objects 1    # measure the mesh and compare with ground_truth.toml
     python scan.py demo                   # the whole pipeline on synthetic data, no robot needed
-"""
+'''
 
 import argparse
 import asyncio
@@ -44,7 +44,7 @@ log = logging.getLogger("scan")
 
 
 def selected(objects, wanted: list[int] | None):
-    """Objects by the ids the survey gave them (all of them without `--objects`)."""
+    ''' Objects by the ids the survey gave them (all of them without `--objects`). '''
     return [obj for obj in objects if wanted is None or obj.id in wanted]
 
 
@@ -169,7 +169,7 @@ def report_board(result: dict, session: Session) -> None:
 
 
 def run_calibrate(args, config: Config) -> None:
-    """Estimate the camera mount from a scanned object and print it in Viam's frame format."""
+    ''' Estimate the camera mount from a scanned object and print it in Viam's frame format. '''
     session = Session(args.session) if args.session else Session.latest(config.resolve(config.data_dir))
     if not args.objects or len(args.objects) != 1:
         raise SystemExit("calibrate needs one scanned object: --objects N (a scan of 20+ views works best)")
@@ -195,7 +195,7 @@ def run_reconstruct(args, config: Config) -> None:
 
 
 def run_compare(args, config: Config) -> None:
-    """Measure reconstructed meshes like calipers would and compare them with ground_truth.toml."""
+    ''' Measure reconstructed meshes like calipers would and compare them with ground_truth.toml. '''
     truth = load_truth(config.resolve(args.truth_file))
     session = Session(args.session) if args.session else Session.latest(config.resolve(config.data_dir))
     objects, _ = session.load_scene()
@@ -222,7 +222,7 @@ def run_compare(args, config: Config) -> None:
 
 
 def run_progression(args, config: Config) -> None:
-    """Meshes and metrics from 1, 2, ... n views of each selected object."""
+    ''' Meshes and metrics from 1, 2, ... n views of each selected object. '''
     session = Session(args.session) if args.session else Session.latest(config.resolve(config.data_dir))
     objects, plane = session.load_scene()
     for obj in selected(objects, args.objects):
@@ -241,9 +241,9 @@ def run_progression(args, config: Config) -> None:
 
 
 def run_demo(config: Config, with_progression: bool = False) -> None:
-    """Synthetic table scene: survey, plan views (all treated as reachable), render
+    ''' Synthetic table scene: survey, plan views (all treated as reachable), render
     noisy views with a hand-eye error, save them, reconstruct, and score against
-    the true shapes."""
+    the true shapes. '''
     scene = synthetic.demo_scene()
     session = Session.create(config.resolve(config.data_dir), "demo-" + time.strftime("%Y%m%d-%H%M%S"))
     log.info("Demo session %s", session.root)

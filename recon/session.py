@@ -1,4 +1,4 @@
-"""On-disk layout of one scanning session.
+''' On-disk layout of one scanning session.
 
 data/<session>/
     session.json            table plane, detected objects, camera intrinsics, config used
@@ -6,7 +6,7 @@ data/<session>/
     object_00/plan.json     reachable views, coverage, relocation decision
     object_00/views/...     the captured views of this object
     object_00/recon/        mesh.ply, mesh.obj, cloud.ply, report.json
-"""
+'''
 
 import json
 import time
@@ -60,7 +60,7 @@ class Session:
                     clutter=[obj.to_dict() for obj in clutter])
 
     def load_clutter(self) -> list[DetectedObject]:
-        """Things on the table that aren't scan targets (obstacles all the same)."""
+        ''' Things on the table that aren't scan targets (obstacles all the same). '''
         return [DetectedObject.from_dict(o) for o in self.read().get("clutter", [])]
 
     def load_scene(self) -> tuple[list[DetectedObject], TablePlane]:

@@ -1,4 +1,4 @@
-"""The pose guard must stop everything when the frame system and the arm controller disagree."""
+''' The pose guard must stop everything when the frame system and the arm controller disagree. '''
 
 import asyncio
 

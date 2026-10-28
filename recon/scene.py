@@ -1,4 +1,4 @@
-"""Find the table plane and the objects standing on it in a world-frame point cloud."""
+''' Find the table plane and the objects standing on it in a world-frame point cloud. '''
 
 import logging
 import math
@@ -9,9 +9,14 @@ import open3d as o3d
 from scipy.spatial import ConvexHull, cKDTree
 
 from .config import WorkspaceConfig
+from .rgbd import OUTLIER_NEIGHBORS, OUTLIER_STD
 from .transforms import make_transform, rotation_z
 
 log = logging.getLogger(__name__)
+
+# An object's top is the 98th percentile of its points' heights, not the highest:
+# flying pixels and noise float above real tops (judgment, not tuned).
+TOP_PERCENTILE = 98
 
 
 @dataclass
@@ -57,7 +62,7 @@ class DetectedObject:
 
     @property
     def radius(self) -> float:
-        """Radius of the bounding sphere around the box."""
+        ''' Radius of the bounding sphere around the box. '''
         return float(np.linalg.norm(self.size) / 2)
 
     @property
@@ -99,7 +104,7 @@ def in_workspace(points: np.ndarray, workspace: WorkspaceConfig) -> np.ndarray:
 
 
 def fit_table_plane(points: np.ndarray, workspace: WorkspaceConfig) -> TablePlane:
-    """RANSAC the dominant near-horizontal plane among workspace points."""
+    ''' RANSAC the dominant near-horizontal plane among workspace points. '''
     remaining = to_cloud(points[in_workspace(points, workspace)])
     for _ in range(3):
         if len(remaining.points) < 1000:
@@ -120,7 +125,7 @@ def to_cloud(points: np.ndarray) -> o3d.geometry.PointCloud:
 
 
 def min_area_rectangle(xy: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
-    """Smallest rectangle around 2D points: center, (length, width), yaw of the long side in degrees."""
+    ''' Smallest rectangle around 2D points: center, (length, width), yaw of the long side in degrees. '''
     hull = xy[ConvexHull(xy).vertices]
     best = None
     for start, end in zip(hull, np.roll(hull, -1, axis=0)):
@@ -141,7 +146,7 @@ def min_area_rectangle(xy: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
 
 
 def merge_fragments(clusters: list[np.ndarray]) -> list[np.ndarray]:
-    """Join clusters whose footprints overlap: one object split by shadows or missing depth."""
+    ''' Join clusters whose footprints overlap: one object split by shadows or missing depth. '''
     clusters = [c for c in clusters if len(c) >= 3]
     merged = True
     while merged:
@@ -161,8 +166,8 @@ def merge_fragments(clusters: list[np.ndarray]) -> list[np.ndarray]:
 
 def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceConfig,
                    colors: np.ndarray | None = None, skipped: list[DetectedObject] | None = None) -> list[DetectedObject]:
-    """Scan targets standing on the table. Anything else standing on it (too big, too
-    flat, crowded) is appended to `skipped`: not worth scanning, but still an obstacle."""
+    ''' Scan targets standing on the table. Anything else standing on it (too big, too
+    flat, crowded) is appended to `skipped`: not worth scanning, but still an obstacle. '''
     heights = plane.height(points)
     keep = in_workspace(points, workspace) & (heights > workspace.min_object_height) & (heights < workspace.max_object_height)
     cloud = to_cloud(points[keep])
@@ -171,7 +176,7 @@ def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceCo
     cloud = cloud.voxel_down_sample(2.0)
     if len(cloud.points) == 0:
         return []
-    cloud, _ = cloud.remove_statistical_outlier(20, 2.0)
+    cloud, _ = cloud.remove_statistical_outlier(OUTLIER_NEIGHBORS, OUTLIER_STD)
     labels = np.asarray(cloud.cluster_dbscan(workspace.cluster_distance, 10))
     candidates = np.asarray(cloud.points)
     rgb = np.asarray(cloud.colors) if cloud.has_colors() else None
@@ -181,7 +186,7 @@ def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceCo
             continue
         center_xy, extents, yaw = min_area_rectangle(cluster[:, :2])
         bottom = plane.z_at(*center_xy)
-        top = float(np.percentile(cluster[:, 2], 98))
+        top = float(np.percentile(cluster[:, 2], TOP_PERCENTILE))
         color = None
         if rgb is not None:
             # Colors of the candidate points that belong to this cluster.
@@ -202,14 +207,14 @@ def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceCo
 
 def table_support(obj: DetectedObject, points: np.ndarray, heights: np.ndarray, inner: float = 5.0,
                   outer: float = 60.0, spacing: float = 5.0) -> float:
-    """Share of a ring around the object's footprint (from `inner` to `outer` mm out)
+    ''' Share of a ring around the object's footprint (from `inner` to `outer` mm out)
     that is bare table: points within 5mm of the table plane.
 
     Scan targets stand in open table. Cables at the table's edge or beside a power
     strip, and things in a gap between tables, have floor, gaps or other things
     around part of them.
-    """
-    table_xy = points[np.abs(heights) < 5.0][:, :2]
+    '''
+    table_xy = points[np.abs(heights) < 5.0][:, :2]  # 5mm: the survey's table noise from 600mm up
     if len(table_xy) == 0:
         return 0.0
     half = obj.size[:2] / 2 + outer
@@ -223,7 +228,7 @@ def table_support(obj: DetectedObject, points: np.ndarray, heights: np.ndarray, 
 
 
 def not_a_target(obj: DetectedObject, points: np.ndarray, heights: np.ndarray, workspace: WorkspaceConfig) -> str:
-    """Why something on the table isn't a scan target ("" if it is one)."""
+    ''' Why something on the table isn't a scan target ("" if it is one). '''
     if obj.size[2] < workspace.min_object_top:
         return f"under {workspace.min_object_top:.0f}mm tall (a cord or flat clutter)"
     support = table_support(obj, points, heights, outer=workspace.clear_margin)
@@ -234,13 +239,13 @@ def not_a_target(obj: DetectedObject, points: np.ndarray, heights: np.ndarray, w
 
 
 def merge_views(detections: list[tuple[np.ndarray, list[DetectedObject]]], gap: float = 15.0) -> list[DetectedObject]:
-    """Combine per-view detections: each object comes from the view that sees it
+    ''' Combine per-view detections: each object comes from the view that sees it
     closest to straight below the camera, where it is least distorted.
 
     `detections` holds (camera xy, objects found in that view). A detection whose
     center lies within another, better-seen object's footprint (plus `gap`) is
     the same object, or a fragment of it.
-    """
+    '''
     ranked = sorted(((np.linalg.norm(obj.center[:2] - camera_xy), obj)
                      for camera_xy, objects in detections for obj in objects), key=lambda item: item[0])
     kept: list[DetectedObject] = []
@@ -251,15 +256,18 @@ def merge_views(detections: list[tuple[np.ndarray, list[DetectedObject]]], gap: 
 
 
 def clutter_around(objects: list[DetectedObject], skipped: list[DetectedObject], gap: float = 15.0) -> list[DetectedObject]:
-    """The skipped things that aren't part of (or a fragment of) a scan target."""
+    ''' The skipped things that aren't part of (or a fragment of) a scan target. '''
     return [c for c in skipped
             if all(np.linalg.norm(c.center[:2] - o.center[:2]) > o.footprint_radius + gap for o in objects)]
 
 
 def color_name(rgb) -> str:
-    """A rough color name from RGB (0-1), for telling objects apart in the survey output."""
+    ''' A rough color name from RGB (0-1), for telling objects apart in the survey output. '''
     import colorsys
     hue, saturation, value = colorsys.rgb_to_hsv(*rgb)
+    # Measured on armfarm14: the table and cables have saturation under 0.1, the test
+    # objects' hues are about 11deg (orange), 43deg (yellow) and 154deg (green). The
+    # boundaries below are the usual color wheel's, placed between those.
     if saturation < 0.25:
         return "white" if value > 0.75 else ("black" if value < 0.2 else "gray")
     hue *= 360

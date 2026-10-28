@@ -1,4 +1,4 @@
-"""ChArUco board: detection on a rendered board, and hand-eye recovery of a known camera mount."""
+''' ChArUco board: detection on a rendered board, and hand-eye recovery of a known camera mount. '''
 
 import cv2
 import numpy as np

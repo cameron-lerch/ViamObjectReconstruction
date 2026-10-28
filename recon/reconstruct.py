@@ -1,4 +1,4 @@
-"""Fuse the views of one object into a mesh.
+''' Fuse the views of one object into a mesh.
 
 1. Place every view in the world using the arm's pose at capture time.
 2. Refine those poses with one joint point-to-plane ICP over all overlapping
@@ -11,7 +11,7 @@
 4. Extract the observed surface, then build a closed mesh with a flat bottom
    on the table (objects rest flat on it; see bottom.py), and measure how far
    each raw view lies from the observed surface.
-"""
+'''
 
 import json
 import logging
@@ -25,8 +25,8 @@ from scipy.spatial.transform import Rotation
 
 from .bottom import boundary_edge_count, close_with_flat_bottom, enclosed_volume
 from .config import Config, ReconstructConfig
-from .rgbd import View, back_project, to_point_cloud
-from .scene import DetectedObject, TablePlane, min_area_rectangle
+from .rgbd import OUTLIER_NEIGHBORS, OUTLIER_STD, View, back_project, to_point_cloud
+from .scene import TOP_PERCENTILE, DetectedObject, TablePlane, min_area_rectangle
 from .transforms import make_transform, rotation_angle_deg
 
 log = logging.getLogger(__name__)
@@ -47,19 +47,23 @@ def object_mask(points: np.ndarray, obj: DetectedObject, plane: TablePlane, sett
 
 def local_table_plane(view: View, pose: np.ndarray, obj: DetectedObject, fallback: TablePlane,
                       config: Config) -> TablePlane:
-    """The table as this view sees it, from a ring of table around the object.
+    ''' The table as this view sees it, from a ring of table around the object.
 
     The survey's table comes from far away and inherits the camera calibration
     error, so near the object the real table can sit millimeters above it and
     leak into the crop. Fitting the table per view, in the same (refined) pose
     used for cropping, cancels that.
-    """
+    '''
     settings = config.reconstruct
     points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
+    # Table points: in the ring around the object and within 20mm of the survey's table
+    # (which can be several mm off here). Fewer than 200 (or 100 on the plane) means
+    # this view doesn't see enough table, so the survey's table is used.
     ring = (obj.contains(points, settings.crop_margin + settings.table_ring)
             & ~obj.contains(points, settings.crop_margin) & (np.abs(fallback.height(points)) < 20))
     if ring.sum() < 200:
         return fallback
+    # RANSAC: 2mm inlier distance (table noise at scan range), 3 points per trial, 300 trials.
     (a, b, c, d), inliers = to_point_cloud(points[ring]).segment_plane(2.0, 3, 300)
     normal = np.array([a, b, c]) * np.sign(c)
     if len(inliers) < 100 or np.degrees(np.arccos(min(1.0, normal[2]))) > config.workspace.max_table_tilt_deg:
@@ -72,7 +76,9 @@ def registration_cloud(view: View, obj: DetectedObject, config: Config) -> o3d.g
     points, colors, _ = back_project(view, settings.pixel_stride, config.camera.min_depth, config.camera.max_depth, edge_grow=config.reconstruct.edge_grow)
     keep = obj.contains(points, settings.context_margin)
     cloud = to_point_cloud(points[keep], colors[keep]).voxel_down_sample(settings.registration_voxel)
-    cloud, _ = cloud.remove_statistical_outlier(20, 2.0)
+    cloud, _ = cloud.remove_statistical_outlier(OUTLIER_NEIGHBORS, OUTLIER_STD)
+    # Normals from neighbors within 4 point spacings (at most 30): smooth enough for
+    # point-to-plane ICP, small enough to follow a 30mm object's corners (judgment).
     cloud.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=4 * settings.registration_voxel, max_nn=30))
     cloud.orient_normals_towards_camera_location(view.camera_position)
     return cloud
@@ -92,7 +98,7 @@ def _matrix_to_twist(transform: np.ndarray) -> np.ndarray:
 
 
 def refine_poses(views: list[View], obj: DetectedObject, config: Config) -> tuple[list[np.ndarray], dict]:
-    """Jointly align all views with point-to-plane ICP, using the arm poses as a prior.
+    ''' Jointly align all views with point-to-plane ICP, using the arm poses as a prior.
 
     Each view gets a small rigid correction (in a frame centered on the object,
     so rotations turn about the object). Every pair of views facing roughly the
@@ -101,7 +107,7 @@ def refine_poses(views: list[View], obj: DetectedObject, config: Config) -> tupl
     all corrections together. Motions the geometry cannot observe, such as a
     cylinder spinning on its axis, simply stay at the arm pose.
     Returns world-frame corrections (apply as correction @ T_world_cam) and diagnostics.
-    """
+    '''
     settings = config.reconstruct
     to_object = make_transform(np.eye(3), -obj.center)
     clouds = [registration_cloud(view, obj, config).transform(to_object) for view in views]
@@ -159,9 +165,11 @@ def refine_poses(views: list[View], obj: DetectedObject, config: Config) -> tupl
             gradient[sj] += weighted_j.T @ residual
             pair_stats[(i, j)] = {"source": i, "target": j, "matches": int(agree.sum()),
                                   "rmse_mm": float(np.sqrt(np.mean(residual**2)))}
+        # Gauss-Newton step; the tiny diagonal term only keeps the solve well-defined.
         step = np.linalg.solve(hessian + 1e-6 * np.eye(count), -gradient)
         transforms = [_twist_to_matrix(step[6 * k : 6 * k + 6]) @ T for k, T in enumerate(transforms)]
         steps = step.reshape(-1, 6)
+        # Converged when no view moves more than 1e-5rad (0.0006deg) or 0.01mm.
         if np.abs(steps[:, :3]).max() < 1e-5 and np.abs(steps[:, 3:]).max() < 0.01:
             break
 
@@ -187,10 +195,12 @@ def fusion_device(name: str) -> o3d.core.Device:
 
 def fuse(views: list[View], poses: list[np.ndarray], obj: DetectedObject, planes: list[TablePlane],
          config: Config) -> o3d.t.geometry.VoxelBlockGrid:
-    """Integrate each view's object pixels into a TSDF voxel grid (millimeter units)."""
+    ''' Integrate each view's object pixels into a TSDF voxel grid (millimeter units). '''
     settings = config.reconstruct
     device = fusion_device(settings.device)
     o3c = o3d.core
+    # Voxels are stored in blocks of 16^3, with room for 50000 blocks: a 60mm object at
+    # 1.5mm voxels needs well under 100 around its surface, a 250mm pumpkin about 1000.
     grid = o3d.t.geometry.VoxelBlockGrid(
         ("tsdf", "weight", "color"), (o3c.float32, o3c.float32, o3c.float32), (1, 1, 3),
         settings.voxel, 16, 50000, device)
@@ -213,7 +223,7 @@ def fuse(views: list[View], poses: list[np.ndarray], obj: DetectedObject, planes
 
 
 def clean_mesh(mesh: o3d.geometry.TriangleMesh, settings: ReconstructConfig) -> o3d.geometry.TriangleMesh:
-    """Drop small floating fragments and lightly smooth what remains."""
+    ''' Drop small floating fragments and lightly smooth what remains. '''
     if len(mesh.triangles) == 0:
         return mesh
     labels, counts, _ = mesh.cluster_connected_triangles()
@@ -235,7 +245,7 @@ def surface_distances(mesh: o3d.geometry.TriangleMesh, points: np.ndarray) -> np
 
 def view_deviation(views: list[View], poses: list[np.ndarray], mesh: o3d.geometry.TriangleMesh,
                    obj: DetectedObject, planes: list[TablePlane], config: Config) -> list[dict]:
-    """How far each single view's raw object points lie from the fused surface."""
+    ''' How far each single view's raw object points lie from the fused surface. '''
     results = []
     for view, pose, plane in zip(views, poses, planes):
         points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
@@ -249,7 +259,7 @@ def view_deviation(views: list[View], poses: list[np.ndarray], mesh: o3d.geometr
 
 
 def combined_plane(planes: list[TablePlane], center: np.ndarray) -> TablePlane:
-    """One table plane from the per-view ones: mean normal, through their mean height at the object."""
+    ''' One table plane from the per-view ones: mean normal, through their mean height at the object. '''
     normal = np.mean([p.normal for p in planes], axis=0)
     normal /= np.linalg.norm(normal)
     z = float(np.mean([p.z_at(*center[:2]) for p in planes]))
@@ -275,7 +285,7 @@ class FusedMesh:
 
 def build_mesh(views: list[View], poses: list[np.ndarray], planes: list[TablePlane], obj: DetectedObject,
                config: Config, min_views: int | None = None) -> FusedMesh:
-    """Fuse posed views into the observed surface, then close it with a flat bottom."""
+    ''' Fuse posed views into the observed surface, then close it with a flat bottom. '''
     settings = config.reconstruct
     # Each view adds 1 to a voxel's weight, and extraction keeps weights strictly
     # above the threshold, so "seen by at least n views" is a threshold of n - 0.5.
@@ -292,27 +302,29 @@ def build_mesh(views: list[View], poses: list[np.ndarray], planes: list[TablePla
 
 def refit_object(views: list[View], poses: list[np.ndarray], obj: DetectedObject, plane: TablePlane,
                  config: Config) -> DetectedObject:
-    """Re-locate the object from the scan's own views.
+    ''' Re-locate the object from the scan's own views.
 
     The box from the survey can be off by more than the crop margin (a survey
     taken with a miscalibrated camera mount placed the real cylinder 17mm
     away), and a box in the wrong place cuts a slice off the object in every
     view. Points above each view's own table, within a generous search margin
     of the old box, are clustered, and the box is refit around the main cluster.
-    """
+    '''
     settings = config.reconstruct
     gathered = []
     for view, pose in zip(views, poses):
         table = local_table_plane(view, pose, obj, plane, config)
         points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
+        # 3mm above the usual clearance, so the base's flared pixels can't widen the box.
         keep = obj.contains(points, settings.refit_search) & (table.height(points) > settings.table_clearance + 3)
         gathered.append(points[keep])
     points = np.concatenate(gathered) if gathered else np.zeros((0, 3))
     if len(points) < 200:
         return obj
-    cloud = to_point_cloud(points).voxel_down_sample(1.5)
-    cloud, _ = cloud.remove_statistical_outlier(20, 2.0)
+    cloud = to_point_cloud(points).voxel_down_sample(settings.voxel)
+    cloud, _ = cloud.remove_statistical_outlier(OUTLIER_NEIGHBORS, OUTLIER_STD)
     points = np.asarray(cloud.points)
+    # DBSCAN: points within 4mm (a few voxels) join a cluster of at least 10 points.
     labels = np.asarray(cloud.cluster_dbscan(4.0, 10))
     if labels.max() < 0:
         return obj
@@ -324,15 +336,15 @@ def refit_object(views: list[View], poses: list[np.ndarray], obj: DetectedObject
     main = max(clusters, key=len)
     center_xy, extents, yaw = min_area_rectangle(main[:, :2])
     bottom = float(np.median([local_table_plane(v, T, obj, plane, config).z_at(*center_xy) for v, T in zip(views, poses)]))
-    top = float(np.percentile(main[:, 2], 98))
+    top = float(np.percentile(main[:, 2], TOP_PERCENTILE))
     return DetectedObject(obj.id, np.array([*center_xy, (top + bottom) / 2]), np.array([*extents, top - bottom]),
                           yaw, len(main))
 
 
 def refined_views(views: list[View], obj: DetectedObject, plane: TablePlane, config: Config,
                   refine: bool = True) -> tuple[DetectedObject, list[np.ndarray], list[TablePlane], dict]:
-    """The object's box refit from the scan, camera poses after alignment, each view's
-    local table, and the alignment report."""
+    ''' The object's box refit from the scan, camera poses after alignment, each view's
+    local table, and the alignment report. '''
     arm_poses = [view.T_world_cam for view in views]
     obj = refit_object(views, arm_poses, obj, plane, config)
     if refine and len(views) > 1:

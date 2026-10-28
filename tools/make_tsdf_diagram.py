@@ -1,6 +1,6 @@
-"""Draw media/diagrams/tsdf_fusion.svg (and .png when cairosvg is installed): how
+''' Draw media/diagrams/tsdf_fusion.svg (and .png when cairosvg is installed): how
 depth from many views is fused in a truncated signed distance function (TSDF)
-on a voxel grid, and what gets thrown out."""
+on a voxel grid, and what gets thrown out. '''
 
 from pathlib import Path
 

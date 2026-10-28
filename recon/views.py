@@ -1,4 +1,4 @@
-"""Candidate camera viewpoints around an object, and how much of it they see."""
+''' Candidate camera viewpoints around an object, and how much of it they see. '''
 
 import math
 from dataclasses import dataclass
@@ -33,7 +33,7 @@ def view_distance(obj: DetectedObject, config: ViewConfig) -> float:
 
 
 def generate_candidates(obj: DetectedObject, config: ViewConfig) -> list[ViewCandidate]:
-    """Rings of views at each elevation, plus one straight down, all aimed at the object."""
+    ''' Rings of views at each elevation, plus one straight down, all aimed at the object. '''
     target = aim_point(obj, config)
     distance = view_distance(obj, config)
     candidates = []
@@ -56,7 +56,15 @@ def _direction(azimuth_deg: float, elevation_deg: float) -> np.ndarray:
 
 
 def _sphere_directions(count: int = 600, min_z: float = -0.15) -> np.ndarray:
-    """Evenly spread unit vectors (Fibonacci sphere), skipping those facing the table."""
+    ''' Evenly spread unit vectors (Fibonacci sphere), skipping those facing the table.
+
+    Point i has height z = 1 - 2(i + 0.5)/count (equal-area bands) and turns by the
+    golden angle, pi(1 + sqrt 5) = 2pi x golden ratio, from the last, which spreads the
+    points evenly (Gonzalez, "Measurement of areas on a sphere using Fibonacci and
+    latitude-longitude lattices", Mathematical Geosciences, 2010). 600 directions are
+    about 8deg apart. Directions down to 0.15 below horizontal (about 9deg) are kept, so
+    surface facing slightly downward (the lower half of a rounded object) still counts.
+    '''
     i = np.arange(count) + 0.5
     z = 1 - 2 * i / count
     angle = math.pi * (1 + 5**0.5) * i
@@ -66,10 +74,10 @@ def _sphere_directions(count: int = 600, min_z: float = -0.15) -> np.ndarray:
 
 
 def coverage(target: np.ndarray, eyes: list[np.ndarray], config: ViewConfig) -> float:
-    """Fraction of the object's outward surface directions that some camera faces closely enough.
+    ''' Fraction of the object's outward surface directions that some camera faces closely enough.
 
     The bottom is excluded since it rests on the table and can never be seen.
-    """
+    '''
     if not eyes:
         return 0.0
     surface = _sphere_directions()
@@ -79,7 +87,7 @@ def coverage(target: np.ndarray, eyes: list[np.ndarray], config: ViewConfig) -> 
 
 
 def order_for_travel(candidates: list[ViewCandidate]) -> list[ViewCandidate]:
-    """Top view first, then ring by ring, reversing direction each ring to keep moves short."""
+    ''' Top view first, then ring by ring, reversing direction each ring to keep moves short. '''
     rings: dict[float, list[ViewCandidate]] = {}
     for candidate in candidates:
         rings.setdefault(candidate.elevation_deg, []).append(candidate)

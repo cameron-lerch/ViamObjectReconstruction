@@ -1,4 +1,4 @@
-"""Turn candidate viewpoints into a reachable scan plan for one object."""
+''' Turn candidate viewpoints into a reachable scan plan for one object. '''
 
 from dataclasses import dataclass, field
 
@@ -42,13 +42,13 @@ class ScanPlan:
 
 
 async def plan_scan(robot: Robot, obj: DetectedObject, others: list[DetectedObject], config: Config) -> ScanPlan:
-    """Check every candidate view with the motion planner, in travel order.
+    ''' Check every candidate view with the motion planner, in travel order.
 
     Each view uses the camera roll whose joints are closest to the previous
     view's, so the wrist does not wind up over a ring. The scanned object and
     all other detected objects are obstacles, so plans never put the gripper
     or camera through them.
-    """
+    '''
     world_state = robot.world_state([obj, *others], config.views.object_margin)
     plan = ScanPlan(obj)
     previous = None
@@ -64,13 +64,13 @@ async def plan_scan(robot: Robot, obj: DetectedObject, others: list[DetectedObje
 
 
 def spread_views(views: list[PlannedView], count: int | None) -> list[PlannedView]:
-    """`count` of the views spread as evenly as possible over the viewing directions:
+    ''' `count` of the views spread as evenly as possible over the viewing directions:
     the most overhead first, then each next one farthest (in direction) from those
     already chosen. They keep their planned (travel) order. All of them without a count.
 
     On the real block and cylinder, 16 of 34 views spread like this already measured
     every side and the top; more views mostly reduce noise (README section 3.1).
-    """
+    '''
     if count is None or count >= len(views):
         return list(views)
     directions = np.array([(v.candidate.eye - v.candidate.target) / np.linalg.norm(v.candidate.eye - v.candidate.target)

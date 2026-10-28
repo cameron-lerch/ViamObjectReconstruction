@@ -1,9 +1,9 @@
-"""Synthetic RGB-D views of known objects on a table, for testing without the robot.
+''' Synthetic RGB-D views of known objects on a table, for testing without the robot.
 
 Views get RealSense-like flaws: depth noise growing with distance squared,
 dropouts, flying pixels at depth edges, and a fixed hand-eye calibration error
 so that the reported camera poses are slightly wrong, as on the real arm.
-"""
+'''
 
 from dataclasses import dataclass, field
 
@@ -63,13 +63,13 @@ class SyntheticScene:
         return color, np.clip(depth, 0, 65535).round().astype(np.uint16)
 
     def surface_points(self, object_index: int, count: int = 20000) -> np.ndarray:
-        """Ground-truth samples on one object's surface, excluding the face resting on the table."""
+        ''' Ground-truth samples on one object's surface, excluding the face resting on the table. '''
         samples = np.asarray(self.objects[object_index].mesh.sample_points_uniformly(count).points)
         return samples[samples[:, 2] > TABLE_Z + 1.0]
 
 
 def _add_flying_pixels(depth: np.ndarray, rng: np.random.Generator, jump: float = 15.0) -> np.ndarray:
-    """At depth edges, some pixels land somewhere between the near and far surface."""
+    ''' At depth edges, some pixels land somewhere between the near and far surface. '''
     padded = np.pad(depth, 1, mode="edge")
     neighbors = np.stack([padded[1:-1, :-2], padded[1:-1, 2:], padded[:-2, 1:-1], padded[2:, 1:-1]])
     far = neighbors.max(axis=0)
@@ -99,7 +99,7 @@ def demo_scene() -> SyntheticScene:
 
 
 def hand_eye_error(translation_mm: float = 2.5, rotation_deg: float = 0.8, seed: int = 7) -> np.ndarray:
-    """A fixed camera-mount error: true camera pose = reported pose @ error."""
+    ''' A fixed camera-mount error: true camera pose = reported pose @ error. '''
     rng = np.random.default_rng(seed)
     axis = rng.normal(size=3)
     axis /= np.linalg.norm(axis)
@@ -110,7 +110,7 @@ def hand_eye_error(translation_mm: float = 2.5, rotation_deg: float = 0.8, seed:
 
 def render_views(scene: SyntheticScene, reported_poses: list[np.ndarray], seed: int = 0,
                  error: np.ndarray | None = None, frames: int = 1) -> list[View]:
-    """Render each pose (with the hand-eye error applied) and pair it with the reported pose."""
+    ''' Render each pose (with the hand-eye error applied) and pair it with the reported pose. '''
     rng = np.random.default_rng(seed)
     error = hand_eye_error() if error is None else error
     views = []

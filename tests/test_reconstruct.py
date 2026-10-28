@@ -1,5 +1,5 @@
-"""End to end on synthetic data: noisy views with a camera-mount error should
-fuse into a mesh much closer to the true shape than any single view."""
+''' End to end on synthetic data: noisy views with a camera-mount error should
+fuse into a mesh much closer to the true shape than any single view. '''
 
 import numpy as np
 

@@ -1,8 +1,8 @@
-"""RGB-D frames: decoding, denoising, back-projection and the on-disk view format.
+''' RGB-D frames: decoding, denoising, back-projection and the on-disk view format.
 
 Each captured view is a folder holding color.jpg, depth.png (uint16, mm) and
 view.json (camera pose in the world, intrinsics, joints, timestamps).
-"""
+'''
 
 import json
 import warnings
@@ -16,6 +16,11 @@ from scipy import ndimage
 from .transforms import transform_points
 
 _DEPTH_HEADER = b"DEPTHMAP"
+
+# Open3D statistical outlier removal: a point is dropped when its mean distance to its
+# 20 nearest neighbors is more than 2 standard deviations above the cloud's average.
+# These are the values from Open3D's point-cloud tutorial; they were not tuned here.
+OUTLIER_NEIGHBORS, OUTLIER_STD = 20, 2.0
 
 
 @dataclass
@@ -57,7 +62,8 @@ class View:
 
 
 def decode_depth(data: bytes) -> np.ndarray:
-    """Decode Viam's image/vnd.viam.dep format: header, int64 width and height, uint16 pixels (all big-endian)."""
+    ''' Decode Viam's image/vnd.viam.dep format: header, int64 width and height, uint16 pixels (all big-endian). '''
+    # Byte layout: 0-7 the 'DEPTHMAP' header, 8-15 width, 16-23 height, then the pixels.
     if not data.startswith(_DEPTH_HEADER):
         raise ValueError("Not a Viam depth map")
     width = int.from_bytes(data[8:16], "big")
@@ -66,7 +72,7 @@ def decode_depth(data: bytes) -> np.ndarray:
 
 
 def median_depth(frames: list[np.ndarray], min_valid_fraction: float = 0.5) -> np.ndarray:
-    """Per-pixel median over valid readings; pixels valid in too few frames become 0."""
+    ''' Per-pixel median over valid readings; pixels valid in too few frames become 0. '''
     stack = np.stack(frames).astype(np.float32)
     valid = stack > 0
     stack[~valid] = np.nan
@@ -78,12 +84,18 @@ def median_depth(frames: list[np.ndarray], min_valid_fraction: float = 0.5) -> n
 
 
 def edge_mask(depth: np.ndarray, relative_jump: float = 0.02, min_jump: float = 5.0, grow: int = 0) -> np.ndarray:
-    """Pixels next to a depth discontinuity, widened by `grow` pixels.
+    ''' Pixels next to a depth discontinuity, widened by `grow` pixels.
 
     RealSense "flying pixels" sit right at the jump, floating between the near and
     far surface. A few pixels further in, stereo matching still blends the two
     ("edge fattening"), pushing an object's outline outward; `grow` drops those too.
-    """
+    '''
+    # A pixel is an edge when one of its 4 neighbors differs by more than min_jump (5mm)
+    # or relative_jump (2%) of its depth, whichever is larger. 5mm is several times the
+    # RealSense's noise between neighboring pixels on a smooth surface at scan range,
+    # so surfaces aren't flagged; the 2% grows with distance, as stereo depth error
+    # does. Both are judgment for the RealSense, not tuned (only `grow` was, see
+    # ReconstructConfig.edge_grow); test again for another camera.
     padded = np.pad(depth.astype(np.float32), 1, mode="edge")
     center = padded[1:-1, 1:-1]
     jump = np.zeros_like(center)
@@ -104,8 +116,8 @@ def pixel_rays(intrinsics: Intrinsics, stride: int = 1) -> tuple[np.ndarray, np.
 
 def back_project(view: View, stride: int = 1, min_depth: float = 0.0, max_depth: float = np.inf,
                  T_world_cam: np.ndarray | None = None, edge_grow: int = 0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """World points, their colors (0-1) and their (row, col) pixels for every valid depth
-    reading away from depth edges (and `edge_grow` pixels beyond them)."""
+    ''' World points, their colors (0-1) and their (row, col) pixels for every valid depth
+    reading away from depth edges (and `edge_grow` pixels beyond them). '''
     v, u, rays = pixel_rays(view.intrinsics, stride)
     depth = view.depth[::stride, ::stride].astype(float)
     edges = edge_mask(view.depth, grow=edge_grow)[::stride, ::stride]
@@ -125,13 +137,13 @@ def to_point_cloud(points: np.ndarray, colors: np.ndarray | None = None) -> o3d.
 
 def save_view(folder: Path, color: bytes | np.ndarray, depth: np.ndarray, T_world_cam: np.ndarray,
               intrinsics: Intrinsics, meta: dict | None = None, color_ext: str = "jpg") -> Path:
-    """Save a view; `color` is either encoded image bytes (with `color_ext`) or an RGB array."""
+    ''' Save a view; `color` is either encoded image bytes (with `color_ext`) or an RGB array. '''
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     if isinstance(color, bytes):
         (folder / f"color.{color_ext}").write_bytes(color)
     else:
-        o3d.io.write_image(str(folder / "color.jpg"), o3d.geometry.Image(np.ascontiguousarray(color)), quality=95)
+        o3d.io.write_image(str(folder / "color.jpg"), o3d.geometry.Image(np.ascontiguousarray(color)), quality=95)  # color is used for colors and the board, not geometry
     o3d.io.write_image(str(folder / "depth.png"), o3d.geometry.Image(np.ascontiguousarray(depth.astype(np.uint16))))
     record = {"T_world_cam": T_world_cam.tolist(), "intrinsics": asdict(intrinsics), **(meta or {})}
     (folder / "view.json").write_text(json.dumps(record, indent=2))

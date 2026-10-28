@@ -1,9 +1,9 @@
-"""Move an object the arm cannot scan well to a scan station, and back afterward.
+''' Move an object the arm cannot scan well to a scan station, and back afterward.
 
 Grasps are top-down, with the jaws closing across the object's narrow side.
 While the object is carried it is attached to the gripper in the planner's
 world state, so the planned path keeps the object clear of obstacles too.
-"""
+'''
 
 import logging
 import math
@@ -36,7 +36,7 @@ class PickAndPlace:
 
 
 def grasp_options(obj: DetectedObject, config: Config) -> list[np.ndarray]:
-    """Top-down gripper poses closing across the object's width; empty if it is too wide."""
+    ''' Top-down gripper poses closing across the object's width; empty if it is too wide. '''
     relocate = config.relocate
     if obj.size[1] > relocate.max_grasp_width:
         return []
@@ -62,7 +62,7 @@ def station_is_free(obj: DetectedObject, x: float, y: float, others: list[Detect
 
 async def choose_station(robot: Robot, obj: DetectedObject, others: list[DetectedObject],
                          config: Config) -> tuple[DetectedObject, ScanPlan] | tuple[None, None]:
-    """First free station whose scan plan reaches the coverage target, else the best one seen."""
+    ''' First free station whose scan plan reaches the coverage target, else the best one seen. '''
     best: tuple[DetectedObject, ScanPlan] | tuple[None, None] = (None, None)
     for x, y in config.relocate.stations:
         if not station_is_free(obj, x, y, others, config.relocate.min_clearance):
@@ -80,7 +80,7 @@ async def choose_station(robot: Robot, obj: DetectedObject, others: list[Detecte
 
 async def plan_pick_and_place(robot: Robot, obj: DetectedObject, destination: DetectedObject,
                               others: list[DetectedObject], config: Config) -> PickAndPlace | None:
-    """Find a grasp whose approach, grasp and place poses all have plans."""
+    ''' Find a grasp whose approach, grasp and place poses all have plans. '''
     gripper = config.machine.gripper
     margin = config.views.object_margin
     height = config.relocate.approach_height

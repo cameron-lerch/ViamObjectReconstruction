@@ -1,5 +1,5 @@
-"""Figures made from saved results: rows of rendered panels with labels, as SVG
-(plus a PNG copy when cairosvg is installed). Used after each scan and for the README."""
+''' Figures made from saved results: rows of rendered panels with labels, as SVG
+(plus a PNG copy when cairosvg is installed). Used after each scan and for the README. '''
 
 import base64
 import json
@@ -34,7 +34,7 @@ def write_svg(svg: Path, parts: list[str]) -> None:
 
 
 def row_figure(svg: Path, title: str, panels: list[tuple[np.ndarray, str, str]], note: str = "") -> None:
-    """A row of panels with a label and a sub-label under each."""
+    ''' A row of panels with a label and a sub-label under each. '''
     gap, top, bottom = 14, 52, 70 if note else 54
     width = len(panels) * PANEL + (len(panels) + 1) * gap
     height = top + PANEL + bottom
@@ -54,7 +54,7 @@ def row_figure(svg: Path, title: str, panels: list[tuple[np.ndarray, str, str]],
 
 
 def color_measured(mesh: o3d.geometry.TriangleMesh, measured: np.ndarray) -> o3d.geometry.TriangleMesh:
-    """Gray-blue where the closed mesh lies on measured data, orange where it was filled in."""
+    ''' Gray-blue where the closed mesh lies on measured data, orange where it was filled in. '''
     gaps, _ = cKDTree(measured).query(np.asarray(mesh.vertices))
     colored = o3d.geometry.TriangleMesh(mesh)
     colored.vertex_colors = o3d.utility.Vector3dVector(np.where((gaps < 2.0)[:, None], MEASURED, FILLED))
@@ -69,8 +69,8 @@ def framing(mesh: o3d.geometry.TriangleMesh) -> tuple[np.ndarray, float]:
 
 def progression_figure(folder: Path, svg: Path, title: str, counts: list[int],
                        elevation: float = 20.0, azimuth: float = -60.0) -> None:
-    """One view's raw points, the observed mesh from each number of views in `counts`
-    (from `progression`'s output in `folder`), and the closed mesh from the most."""
+    ''' One view's raw points, the observed mesh from each number of views in `counts`
+    (from `progression`'s output in `folder`), and the closed mesh from the most. '''
     rows = {str(r["views"]): r for r in json.loads((folder / "summary.json").read_text())}
     last = max(counts)
     closed = o3d.io.read_triangle_mesh(str(folder / f"views_{last:02d}" / "mesh.ply"))
@@ -93,7 +93,7 @@ def progression_figure(folder: Path, svg: Path, title: str, counts: list[int],
 
 
 def doubling_counts(n: int) -> list[int]:
-    """1, 2, 4, 8, ... up to (and always including) n."""
+    ''' 1, 2, 4, 8, ... up to (and always including) n. '''
     counts = [1]
     while counts[-1] * 2 < n:
         counts.append(counts[-1] * 2)

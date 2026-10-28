@@ -1,11 +1,11 @@
-"""Render meshes to PNG images offscreen (numpy z-buffer, no window or GPU).
+''' Render meshes to PNG images offscreen (numpy z-buffer, no window or GPU).
 
 Used for README figures and quick checks. Open the real files in Blender to
 inspect them interactively.
 
     python tools/render_mesh.py out.png data/<session>/object_01/recon/mesh.ply [more meshes ...]
         [--elevation 25] [--azimuth -60] [--size 480] [--labels "1 view,25 views"]
-"""
+'''
 
 import argparse
 import sys

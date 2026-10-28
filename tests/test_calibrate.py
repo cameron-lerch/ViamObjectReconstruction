@@ -1,4 +1,4 @@
-"""Mount calibration should recover a known camera-mount error from a synthetic scan."""
+''' Mount calibration should recover a known camera-mount error from a synthetic scan. '''
 
 import numpy as np
 

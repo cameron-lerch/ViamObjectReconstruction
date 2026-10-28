@@ -1,4 +1,4 @@
-"""Rigid-transform helpers.
+''' Rigid-transform helpers.
 
 Poses are 4x4 homogeneous matrices in millimeters, mapping points from a child
 frame into its parent (usually the world). Viam describes orientation with an
@@ -10,7 +10,7 @@ Near the poles (axis within 1e-4 of +z or -z) rdk measures theta as if the
 longitude were zero, i.e. theta is the total turn about z. An axis like
 (0.0068, -0.0057, 0.99996) falls in that zone, and ignoring the rule rotates
 the frame by the longitude (here 40deg).
-"""
+'''
 
 import math
 
@@ -22,7 +22,7 @@ _POLE_RADIUS = 1e-4
 
 
 def _pole_sign(o_z: float) -> int:
-    """+1 or -1 when the axis is within the pole radius of +z or -z, else 0."""
+    ''' +1 or -1 when the axis is within the pole radius of +z or -z, else 0. '''
     return int(np.sign(o_z)) if 1 - abs(o_z) <= _POLE_RADIUS else 0
 
 
@@ -53,7 +53,7 @@ def make_transform(rotation: np.ndarray, translation) -> np.ndarray:
 
 
 def pose_to_matrix(pose) -> np.ndarray:
-    """Convert a viam.proto.common.Pose (or anything with its fields) to 4x4."""
+    ''' Convert a viam.proto.common.Pose (or anything with its fields) to 4x4. '''
     rotation = ov_to_matrix(pose.o_x, pose.o_y, pose.o_z, pose.theta)
     return make_transform(rotation, [pose.x, pose.y, pose.z])
 
@@ -75,17 +75,17 @@ def rotation_z(angle_deg: float) -> np.ndarray:
 
 
 def look_at(eye, target, roll_deg: float = 0.0) -> np.ndarray:
-    """Camera pose at `eye` whose optical axis (+z) points at `target`.
+    ''' Camera pose at `eye` whose optical axis (+z) points at `target`.
 
     Uses the OpenCV camera convention (+x right, +y down in the image). With
     roll 0 the top of the image faces world +z, or world +x when the camera
     looks straight down. `roll_deg` spins the camera about its optical axis.
-    """
+    '''
     eye = np.asarray(eye, dtype=float)
     z_axis = np.asarray(target, dtype=float) - eye
     z_axis /= np.linalg.norm(z_axis)
     up = np.array([0.0, 0.0, 1.0])
-    if abs(z_axis @ up) > 0.99:
+    if abs(z_axis @ up) > 0.99:  # looking within about 8deg of straight up or down: 'up' is undefined, use +x
         up = np.array([1.0, 0.0, 0.0])
     y_axis = -(up - (up @ z_axis) * z_axis)
     y_axis /= np.linalg.norm(y_axis)

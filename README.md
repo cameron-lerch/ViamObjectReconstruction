@@ -554,7 +554,7 @@ Each view's depth map is then cropped to the object: inside its box (plus 12mm) 
 - **Readings are averaged, not thrown out.** Each voxel keeps a weighted average of every view's signed distance, so random noise cancels. The surface is where the average crosses zero (marching cubes).
 - **Data is thrown out before and after fusion, not inside it:** before, pixels at and within 2px of depth edges (below) and anything outside the object's box or below its table; after, surface seen by fewer than 2 views, and small fragments.
 
-**The edge filter** works on each depth *image*, not on the table. Wherever depth jumps between neighboring pixels (an object's outline against the table behind it), the RealSense's readings are unreliable: some pixels float between the near and far surface ("flying pixels"), and a few pixels further in, stereo matching blends foreground and background, pushing the object's outline outward ("edge fattening"). On the real cylinder, wall points within 3 pixels of the outline sat 2.3mm too far out. The filter drops pixels at a jump of more than 5mm (or 2% of the distance), plus 2 pixels beyond (`[reconstruct] edge_grow`); pixels without a reading are never edges. It is unrelated to the survey's table-edge rule ([§5.1](#51-survey-finding-the-table-and-whats-on-it)), which decides where the *table* ends so the survey doesn't look at the floor.
+**The edge filter** works on each depth *image*, not on the table. Wherever depth jumps between neighboring pixels (an object's outline against the table behind it), the RealSense's readings are unreliable: some pixels float between the near and far surface ("flying pixels"), and a few pixels further in, stereo matching blends foreground and background, pushing the object's outline outward ("edge fattening"). On the real cylinder, wall points within 3 pixels of the outline sat 2.3mm too far out. The filter's thresholds (a 5mm or 2% jump) and its 2px growth were chosen for the RealSense; another camera has different edge behavior, so they need testing again with it ([§15.7](#157-a-second-camera-the-orbbec-astra-2)). The filter drops pixels at a jump of more than 5mm (or 2% of the distance), plus 2 pixels beyond (`[reconstruct] edge_grow`); pixels without a reading are never edges. It is unrelated to the survey's table-edge rule ([§5.1](#51-survey-finding-the-table-and-whats-on-it)), which decides where the *table* ends so the survey doesn't look at the floor.
 
 That is `observed.obj`: everything in it was measured, and it is open wherever nothing was seen.
 
@@ -943,7 +943,14 @@ Use a second arm to hold and turn the object while the camera arm scans it, or h
 - the gripper masked out of the depth images (its geometry is known from the frame system);
 - the object's pose tracked as it moves, either from the gripper's pose or by registering each view to the growing model.
 
-### 15.7 Also
+### 15.7 A second camera: the Orbbec Astra 2
+
+The next step is to scan the same objects with an Orbbec Astra 2, which is expected to give cleaner depth, and compare it with the RealSense side by side. Several settings here were chosen for the RealSense and need choosing again, on real scans, for the Orbbec: the edge filter (thresholds and growth), the depth range, the scan distance (each camera has a minimum range), the voxel size and truncation band, and the depth correction from the board. Each is marked in [`recon/config.py`](recon/config.py). To compare the two cameras fairly, each is calibrated with the board and scans the same planned views of the same objects; then compare:
+
+- **per view:** depth error against the ChArUco board, noise on flat table, the share of pixels with no reading, flying pixels at edges, and noise across the 5 frames taken at one pose;
+- **fused:** error against the calipers (how much too wide), wall roughness, volume, and how many views each needs to measure the whole object.
+
+### 15.8 Also
 
 - Scans of objects that aren't blocks: a pumpkin, a can, a water bottle, a roll of tape.
 - Relocation on hardware, with the gripper measured.

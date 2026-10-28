@@ -1,4 +1,4 @@
-"""Make the README's result figures from saved sessions (offscreen; no windows).
+''' Make the README's result figures from saved sessions (offscreen; no windows).
 
     python tools/make_figures.py [--real data/<session>] [--real-object 1] [--synthetic data/demo-<...>]
     python tools/make_figures.py --only-latest   # just the figures of the latest real scans (fast)
@@ -7,7 +7,7 @@ Figures are SVGs (rendered panels plus labels) in media/images/; when cairosvg
 is installed (pip install cairosvg) a PNG copy is written next to each.
 Run `python scan.py progression ...` and `python scan.py demo --progression`
 first: the progression meshes are read from disk.
-"""
+'''
 
 import argparse
 import json
@@ -55,7 +55,7 @@ def measured_figure(folder: Path, counts: list[int], elevation: float, azimuth: 
 
 
 def observed_vs_closed_figure(session: Session, object_id: int, name: str, title: str) -> None:
-    """observed.obj and mesh.obj of one object, from the side and from below."""
+    ''' observed.obj and mesh.obj of one object, from the side and from below. '''
     folder = session.recon_dir(object_id)
     observed = o3d.io.read_triangle_mesh(str(folder / "observed.ply"))
     closed = o3d.io.read_triangle_mesh(str(folder / "mesh.ply"))

@@ -1,4 +1,4 @@
-"""--max-views: a subset of the planned views spread over all directions."""
+''' --max-views: a subset of the planned views spread over all directions. '''
 
 import numpy as np
 

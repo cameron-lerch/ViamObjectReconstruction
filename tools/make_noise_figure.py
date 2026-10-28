@@ -1,4 +1,4 @@
-"""How noisy one RealSense view is: the color image and the raw point cloud of a few
+''' How noisy one RealSense view is: the color image and the raw point cloud of a few
 views of one object, next to all views together and the fused mesh (offscreen; no windows).
 
     python tools/make_noise_figure.py [--session data/<session>] [--object 0] [--views 4]
@@ -9,7 +9,7 @@ removal. Every cloud is drawn from the same side-on direction, so the panels
 compare directly; each color image is turned (in 90° steps) so world up points
 up, like the renders, and every panel has a small world x/y/z axis triad. Writes
 media/images/<--name>.svg (and .png with cairosvg).
-"""
+'''
 
 import argparse
 import sys
@@ -38,7 +38,7 @@ AXIS_COLORS = ("#D64545", "#2F9E44", "#2F6FD6")
 
 
 def raw_points(view, obj, margin: float = 25.0):
-    """Every depth reading of the view near the object (plus a little table), with its color."""
+    ''' Every depth reading of the view near the object (plus a little table), with its color. '''
     v, u, rays = pixel_rays(view.intrinsics)
     depth = view.depth.astype(float)
     keep = depth > 0
@@ -50,9 +50,9 @@ def raw_points(view, obj, margin: float = 25.0):
 
 
 def color_crop(view, obj, pad: float = 0.6) -> tuple[np.ndarray, np.ndarray]:
-    """The color image around the object, square, scaled to PANEL, and the world
+    ''' The color image around the object, square, scaled to PANEL, and the world
     axes as they appear in it: per axis, its panel-pixel direction (right, down)
-    and how much it points away from the viewer."""
+    and how much it points away from the viewer. '''
     corners = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]) * obj.size / 2 + obj.center
     world_to_camera = np.linalg.inv(view.T_world_cam)
     k = view.intrinsics
@@ -76,7 +76,7 @@ def color_crop(view, obj, pad: float = 0.6) -> tuple[np.ndarray, np.ndarray]:
 
 
 def render_axes() -> np.ndarray:
-    """The world axes as they appear in the side-on point and mesh renders."""
+    ''' The world axes as they appear in the side-on point and mesh renders. '''
     a, e = np.radians(SIDE_AZIMUTH), np.radians(SIDE_ELEVATION)
     direction = np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)])
     rotation = look_at(direction, np.zeros(3))[:3, :3]  # columns: image right, image down, forward
@@ -84,16 +84,16 @@ def render_axes() -> np.ndarray:
 
 
 def turned(image: np.ndarray, axes: np.ndarray, quarter_turns: int) -> tuple[np.ndarray, np.ndarray]:
-    """The image turned counterclockwise in 90° steps, and its axis directions with it."""
+    ''' The image turned counterclockwise in 90° steps, and its axis directions with it. '''
     for _ in range(quarter_turns % 4):
         axes = np.column_stack([axes[:, 1], -axes[:, 0], axes[:, 2]])  # (right, down) -> (down, -right)
     return np.ascontiguousarray(np.rot90(image, quarter_turns)), axes
 
 
 def match_turn(axes: np.ndarray) -> int:
-    """Quarter turns (counterclockwise) that make world up (+z) point up in the image, so
+    ''' Quarter turns (counterclockwise) that make world up (+z) point up in the image, so
     the table is at the bottom as in the renders. A view looking straight down has no
-    up in the picture (z points at the camera), so it isn't turned."""
+    up in the picture (z points at the camera), so it isn't turned. '''
     z = axes[2, :2]
     if np.hypot(*z) < 0.3 * np.linalg.norm(axes[:, :2], axis=1).max():
         return 0
@@ -101,8 +101,8 @@ def match_turn(axes: np.ndarray) -> int:
 
 
 def pick_views(views, count: int):
-    """Spread over elevation and azimuth: the highest view first, then the views
-    farthest (in viewing direction) from those already picked."""
+    ''' Spread over elevation and azimuth: the highest view first, then the views
+    farthest (in viewing direction) from those already picked. '''
     directions = np.array([v.T_world_cam[:3, 2] for v in views])
     order = [int(np.argmin(directions[:, 2]))]  # most nearly straight down
     while len(order) < min(count, len(views)):
@@ -113,11 +113,11 @@ def pick_views(views, count: int):
 
 
 def triad(x: float, y: float, axes: np.ndarray, box: float = 64.0, margin: float = 8.0) -> list[str]:
-    """SVG for a small world x/y/z axis marker in a box in the panel's bottom-left
+    ''' SVG for a small world x/y/z axis marker in a box in the panel's bottom-left
     corner. Arrows keep their relative lengths (a short one points toward or away
     from the viewer); one pointing nearly straight at the viewer, as z does in a
     view from directly above, is a circled dot, and one pointing nearly straight
-    away is a circled cross. Everything stays inside the box."""
+    away is a circled cross. Everything stays inside the box. '''
     left, top = x + margin, y + PANEL - margin - box
     away = axes[:, 2]
     axes = axes[:, :2]
@@ -139,7 +139,7 @@ def triad(x: float, y: float, axes: np.ndarray, box: float = 64.0, margin: float
     segments = [(origin, tip) for _, tip, _ in arrows if tip is not None]
 
     def clearance(point, placed):
-        """How far a label at `point` is from every arrow and every placed label."""
+        ''' How far a label at `point` is from every arrow and every placed label. '''
         gaps = [np.linalg.norm(point - other) - 11 for other in placed] + [np.linalg.norm(point - origin) - 9]
         for start, end in segments:
             t = np.clip((point - start) @ (end - start) / max((end - start) @ (end - start), 1e-9), 0, 1)
@@ -172,7 +172,7 @@ def triad(x: float, y: float, axes: np.ndarray, box: float = 64.0, margin: float
 
 
 def grid_svg(name: str, title: str, columns: list[tuple], note: str) -> None:
-    """Columns of (top image, its axes, bottom image, its axes, label, sub-label)."""
+    ''' Columns of (top image, its axes, bottom image, its axes, label, sub-label). '''
     gap, top, bottom = 14, 52, 74
     width = len(columns) * PANEL + (len(columns) + 1) * gap
     height = top + 2 * PANEL + gap + bottom

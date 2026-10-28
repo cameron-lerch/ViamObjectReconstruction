@@ -1,8 +1,8 @@
-"""Render meshes and point clouds to images offscreen (numpy z-buffer, no window or GPU).
+''' Render meshes and point clouds to images offscreen (numpy z-buffer, no window or GPU).
 
 Used for figures saved with each scan and in the README. Open the real files in
 Blender to inspect them interactively.
-"""
+'''
 
 from pathlib import Path
 
@@ -18,7 +18,7 @@ BASE_COLOR = np.array([0.72, 0.74, 0.78])
 def render(mesh: o3d.geometry.TriangleMesh, size: int = 480, elevation_deg: float = 25.0,
            azimuth_deg: float = -60.0, center: np.ndarray | None = None, radius: float | None = None,
            use_colors: bool = False, wire_boundary: bool = True) -> np.ndarray:
-    """Shaded image (size x size x 3, uint8) of a mesh seen from the given direction."""
+    ''' Shaded image (size x size x 3, uint8) of a mesh seen from the given direction. '''
     vertices = np.asarray(mesh.vertices)
     triangles = np.asarray(mesh.triangles)
     image = np.tile(BACKGROUND, (size, size, 1))
@@ -82,8 +82,8 @@ def render(mesh: o3d.geometry.TriangleMesh, size: int = 480, elevation_deg: floa
 def render_points(points: np.ndarray, size: int = 480, elevation_deg: float = 25.0, azimuth_deg: float = -60.0,
                   center: np.ndarray | None = None, radius: float | None = None, dot: int = 2,
                   colors: np.ndarray | None = None) -> np.ndarray:
-    """Raw points as small dots, darker when farther, so a noisy cloud stays legible
-    (in their own colors, 0-1, if given)."""
+    ''' Raw points as small dots, darker when farther, so a noisy cloud stays legible
+    (in their own colors, 0-1, if given). '''
     image = np.tile(BACKGROUND, (size, size, 1))
     if len(points) == 0:
         return image.astype(np.uint8)

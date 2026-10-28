@@ -1,4 +1,4 @@
-"""Matching a mesh to the caliper ground truth by shape and size."""
+''' Matching a mesh to the caliper ground truth by shape and size. '''
 
 import open3d as o3d
 

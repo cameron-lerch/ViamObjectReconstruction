@@ -1,4 +1,4 @@
-"""Build a closed (watertight) mesh with a flat bottom on the table.
+''' Build a closed (watertight) mesh with a flat bottom on the table.
 
 The fused surface is open: the camera never sees the underside, fusion stops a
 little above the table, and steep or hidden walls leave holes. Objects here
@@ -13,7 +13,7 @@ rest flat on the table, which gives two priors:
 Screened Poisson reconstruction fits one closed surface through the observed
 points (with their normals) plus these prior points, and anything that ends up
 below the table is flattened onto it.
-"""
+'''
 
 import numpy as np
 import open3d as o3d
@@ -29,16 +29,18 @@ TOP_SEARCH = 6.0  # the wall's local height comes from observed points within th
 
 def _table_axes(table: TablePlane) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     normal = table.normal / np.linalg.norm(table.normal)
+    # Any vector not parallel to the normal seeds the cross product; avoid a near-parallel one.
     u = np.cross(normal, [1.0, 0.0, 0.0] if abs(normal[0]) < 0.9 else [0.0, 1.0, 0.0])
     u /= np.linalg.norm(u)
     return normal, u, np.cross(normal, u)
 
 
 def footprint(flat: np.ndarray, shrink: float) -> tuple[np.ndarray, np.ndarray]:
-    """Outline seen from above, as a smoothed occupancy grid, and the grid's origin.
+    ''' Outline seen from above, as a smoothed occupancy grid, and the grid's origin.
 
     Edge noise pads the outline, so it is shrunk by `shrink` mm.
-    """
+    '''
+    # A few cells of padding so closing and blurring never touch the grid's border.
     low = flat.min(axis=0) - 4 * GRID
     cells = ((flat - low) / GRID).astype(int)
     grid = np.zeros(cells.max(axis=0) + 5, dtype=bool)
@@ -52,7 +54,7 @@ def footprint(flat: np.ndarray, shrink: float) -> tuple[np.ndarray, np.ndarray]:
 
 
 def prior_points(points: np.ndarray, table: TablePlane, shrink: float) -> tuple[np.ndarray, np.ndarray]:
-    """Flat-bottom points and (where unobserved) straight-wall points, with outward normals."""
+    ''' Flat-bottom points and (where unobserved) straight-wall points, with outward normals. '''
     normal, u, v = _table_axes(table)
     flat = np.stack([points @ u, points @ v], axis=1)
     occupancy, low = footprint(flat, shrink)
@@ -67,6 +69,8 @@ def prior_points(points: np.ndarray, table: TablePlane, shrink: float) -> tuple[
 
     # The outline: cells straddling the 0.5 level, moved onto it along the gradient.
     gradient = np.stack(np.gradient(occupancy, GRID), axis=-1)
+    # Cells partly inside the blurred outline straddle its 0.5 level (15-85% is a band
+    # a couple of cells wide).
     edge = (occupancy > 0.15) & (occupancy < 0.85)
     cells = np.argwhere(edge)
     slope = gradient[edge]
@@ -102,7 +106,7 @@ def boundary_edge_count(mesh: o3d.geometry.TriangleMesh) -> int:
 
 
 def enclosed_volume(mesh: o3d.geometry.TriangleMesh) -> float:
-    """Volume of a closed mesh (divergence theorem); tolerates tiny self-intersections."""
+    ''' Volume of a closed mesh (divergence theorem); tolerates tiny self-intersections. '''
     vertices, triangles = np.asarray(mesh.vertices), np.asarray(mesh.triangles)
     a, b, c = vertices[triangles[:, 0]], vertices[triangles[:, 1]], vertices[triangles[:, 2]]
     return float(abs(np.einsum("ij,ij->i", a, np.cross(b, c)).sum()) / 6)
@@ -110,16 +114,16 @@ def enclosed_volume(mesh: o3d.geometry.TriangleMesh) -> float:
 
 def close_with_flat_bottom(cloud: o3d.geometry.PointCloud, table: TablePlane, depth: int = 9,
                            scale: float = 3.0, shrink: float = 1.0, base_band: float = 5.0) -> o3d.geometry.TriangleMesh:
-    """Closed mesh through the fused surface points, with a flat bottom on the table.
+    ''' Closed mesh through the fused surface points, with a flat bottom on the table.
 
     `cloud` needs outward normals (the TSDF's point cloud has them). `scale` sizes
     Poisson's working box relative to the data; too tight a box leaves the surface
     open where it meets the box. The footprint comes from points above the base
     band, so it is the object's outline rather than the flared base.
-    """
+    '''
     points, normals = np.asarray(cloud.points), np.asarray(cloud.normals)
     above = table.height(points) > 0
-    if above.sum() < 50:
+    if above.sum() < 50:  # too little surface to close
         return o3d.geometry.TriangleMesh()
     points, normals = points[above], normals[above]
     # Where wall meets table, mixed depth pixels flare outward; the straight-wall

@@ -1,4 +1,4 @@
-"""Compare reconstructions of one object from 1, 2, ... n views.
+''' Compare reconstructions of one object from 1, 2, ... n views.
 
 All views are aligned once (with every view available), then the first k views
 are fused for each k, so each subset uses the same best-available camera poses
@@ -26,7 +26,7 @@ surface that at least 2 of them agree on.
 
 A first row ("raw") scores the raw points of the first view, i.e. one camera
 frame with no fusion at all.
-"""
+'''
 
 import csv
 import json
@@ -44,13 +44,17 @@ from .scene import DetectedObject, TablePlane
 
 log = logging.getLogger(__name__)
 
+# Roughness is measured on 3mm patches: big enough for 8+ points, small enough that
+# a patch is nearly flat on these objects (the cylinder's curve adds the same small
+# amount to every row, so rows still compare).
 ROUGHNESS_RADIUS = 3.0
+# Surface counts as covered within 2mm: the fusion voxel (1.5mm) plus a little noise.
 COMPLETENESS_TOLERANCE = 2.0
 
 
 def spread_order(views: list[View], center: np.ndarray) -> list[int]:
-    """Start with the view from highest above, then keep adding the view pointing
-    most differently from those already chosen."""
+    ''' Start with the view from highest above, then keep adding the view pointing
+    most differently from those already chosen. '''
     directions = np.array([(v.camera_position - center) / np.linalg.norm(v.camera_position - center) for v in views])
     order = [int(np.argmax(directions[:, 2]))]
     while len(order) < len(views):
@@ -61,7 +65,7 @@ def spread_order(views: list[View], center: np.ndarray) -> list[int]:
 
 
 def roughness(points: np.ndarray, radius: float = ROUGHNESS_RADIUS, samples: int = 4000) -> float:
-    """Median RMS distance of local patches from their best-fit plane."""
+    ''' Median RMS distance of local patches from their best-fit plane. '''
     if len(points) < 20:
         return float("nan")
     points = np.asarray(to_point_cloud(points).voxel_down_sample(radius / 4).points)
@@ -76,11 +80,12 @@ def roughness(points: np.ndarray, radius: float = ROUGHNESS_RADIUS, samples: int
 
 
 def rigid_fit(points: np.ndarray, mesh: o3d.geometry.TriangleMesh) -> np.ndarray:
-    """Best rigid transform of `points` onto `mesh`, to score shape apart from placement."""
+    ''' Best rigid transform of `points` onto `mesh`, to score shape apart from placement. '''
     target = mesh.sample_points_uniformly(30000)
     target.estimate_normals()
     source = to_point_cloud(points)
     method = o3d.pipelines.registration.TransformationEstimationPointToPlane()
+    # 5mm correspondence distance: the shapes are already close (same place, same object).
     return o3d.pipelines.registration.registration_icp(source, target, 5.0, np.eye(4), method).transformation
 
 
@@ -109,8 +114,8 @@ def _score(points: np.ndarray, reference: o3d.geometry.TriangleMesh, truth: o3d.
 
 
 def measured_share(mesh: o3d.geometry.TriangleMesh, measured: np.ndarray) -> float:
-    """Share of a closed mesh's surface lying on measured data; the rest is the
-    flat-bottom and straight-wall fill."""
+    ''' Share of a closed mesh's surface lying on measured data; the rest is the
+    flat-bottom and straight-wall fill. '''
     samples = np.asarray(mesh.sample_points_uniformly(20000).points)
     gaps, _ = cKDTree(measured).query(samples, distance_upper_bound=COMPLETENESS_TOLERANCE)
     return float(np.isfinite(gaps).mean())
@@ -119,7 +124,7 @@ def measured_share(mesh: o3d.geometry.TriangleMesh, measured: np.ndarray) -> flo
 def progression(views: list[View], obj: DetectedObject, plane: TablePlane, config: Config, folder: Path,
                 counts: list[int] | None = None, order: str = "spread", refine: bool = True,
                 truth: o3d.geometry.TriangleMesh | None = None, min_views: int | None = None) -> list[dict]:
-    """`min_views` overrides the "seen by at least min(N, k) views" rule for every subset."""
+    ''' `min_views` overrides the "seen by at least min(N, k) views" rule for every subset. '''
     folder = Path(folder)
     log.info("Aligning all %d views once", len(views))
     obj, poses, planes, _ = refined_views(views, obj, plane, config, refine)
@@ -195,7 +200,7 @@ def write_summary(rows: list[dict], folder: Path) -> None:
 
 
 def table(rows: list[dict]) -> str:
-    """Rows as a fixed-width text table, for the terminal."""
+    ''' Rows as a fixed-width text table, for the terminal. '''
     present = [(key, label, fmt) for key, label, fmt in COLUMNS if any(row.get(key) is not None for row in rows)]
     lines = ["  ".join(f"{label:>8}" for _, label, _ in present)]
     for row in rows:
