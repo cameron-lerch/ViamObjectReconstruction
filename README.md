@@ -16,54 +16,34 @@ It runs on a UFactory xArm6 in a remote lab cell (armfarm14) and includes a synt
 ## Quick Start
 
 > [!NOTE]
-> You need a Viam machine with an arm, a depth camera mounted on the arm (in the frame system), and the builtin motion service. See [Machine Configuration](#102-machine-configuration).
+> You need a Viam machine with an arm, a depth camera mounted on the arm, and the builtin motion service ([Machine Configuration](#102-machine-configuration)). This is the shortest path; every other command, option and setting, the tests, and running without a robot are in [Setup and Usage](#10-setup-and-usage).
 
 **1. Install**
 
 ```bash
 git clone git@github.com:cameron-lerch/ViamObjectReconstruction.git
 cd ViamObjectReconstruction
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Put the machine's API key in `apikey.json` (it is git-ignored) and the machine address and resource names in `config.toml`:
+Put the machine's API key in `apikey.json` as `{"key": "...", "key_id": "..."}` and its address in `config.toml`.
 
-```json
-{"key": "<api key>", "key_id": "<api key id>"}
-```
-
-**2. Try it without a robot**
+**2. Calibrate** (once per setup, with the ChArUco mat on the table; nothing moves without `--execute`)
 
 ```bash
-python -m pytest                          # 52 tests, about 80s
-python scan.py demo --progression         # synthetic table scene: survey, plan, render noisy views, reconstruct, score
+python scan.py calibrate-board --execute --save-mount   # finds the mat and calibrates the camera
+python scan.py survey --execute                         # maps the table
+python scan.py touch-off --execute                      # at the arm, with a sheet of paper
 ```
 
-**3. Run on the arm** (nothing moves without `--execute`; `--confirm-moves` or `--confirm-above 45` previews moves)
-
-Once per setup (or after the camera is bumped or remounted), calibrate with the ChArUco mat on the table:
+**3. Scan**
 
 ```bash
-python scan.py calibrate-board                        # find the mat from where the camera is and plan (no motion)
-python scan.py calibrate-board --execute --confirm-above 45 --save-mount   # about 2 minutes
-python scan.py survey --execute                       # finds the table (touch-off needs it)
-python scan.py touch-off --execute                    # with you at the arm and a sheet of paper: the real fingertip reach
+python scan.py scan --execute     # finds the objects on the table and scans each one
 ```
 
-Then, for each new set of objects: a **survey** finds what's on the table and where; a **scan** builds each object's mesh. A scan without `--reuse-survey` runs its own survey first, so either run the survey and then scan with `--reuse-survey` (as below, choosing objects from the survey's list), or run just `scan --execute`. Without `--objects`, a scan takes every reachable object the survey found, whatever it is.
-
-```bash
-python scan.py survey --execute                      # overhead views across the table; prints each object's id and color
-python scan.py scan --execute --reuse-survey               # every object found (or --objects 0,2); about 15 minutes per object
-python scan.py scan --execute --reuse-survey --max-views 16   # about half the time: 16 views spread over all directions
-python scan.py compare --objects 0 --truth green_cylinder  # measure the mesh and compare with ground_truth.toml (calipers)
-python scan.py reconstruct --objects 1                # rebuild meshes offline: mesh.obj (closed) and observed.obj
-python scan.py progression --objects 1                # meshes and metrics from 1, 2, ... n views
-```
-
-Open `data/<session>/object_NN/recon/mesh.ply` in Blender (File > Import > Stanford PLY). Units are millimeters, so scale the import by 0.001.
+**4. Results** are in `data/<session>/object_NN/`: `recon/mesh.obj` (the closed model), `recon/observed.obj` (only what was measured) and `progression.png` (the model from 1 to all views). Open the meshes in Blender; units are millimeters, so scale the import by 0.001.
 
 ---
 
@@ -848,7 +828,50 @@ How to read the sizes:
 
 The camera mount is a 4 × 4 transform (camera pose relative to the arm's end, in mm) in `calibration/armfarm14_camera_mount.json`, written by `scan.py calibrate --save-mount` or `calibrate-board --save-mount`. Both commands also print the equivalent Viam frame values, in case you want the app's 3D scene to match; the code doesn't read them.
 
-### 10.3 Commands
+### 10.3 Running step by step
+
+The [Quick Start](#quick-start) runs everything with defaults. These are the same steps with more control, for troubleshooting and for watching the arm closely.
+
+**Previewing moves.** Nothing moves without `--execute`; without it, every command only looks and plans. With it:
+- `--confirm-moves` shows every move (target and joint changes) and waits for Enter;
+- `--confirm-above 45` only waits when a joint would turn 45° or more;
+- `--step` asks before each object.
+
+**Calibrating, with a plan-only look first:**
+
+```bash
+python scan.py calibrate-board                        # find the mat from where the camera is and plan its views (no motion)
+python scan.py calibrate-board --execute --confirm-above 45 --save-mount   # about 2 minutes
+python scan.py survey --execute                       # finds the table (touch-off needs it)
+python scan.py touch-off                              # plan only: check the 3 touch spots are open table
+python scan.py touch-off --execute                    # with you at the arm and a sheet of paper
+```
+
+**Scanning in stages.** A **survey** finds what's on the table and where; a **scan** builds each object's mesh. `scan --execute` alone runs its own survey first. To check the survey (and the plan) before scanning, run them separately and scan with `--reuse-survey`:
+
+```bash
+python scan.py survey --execute                       # overhead views across the table; prints each object's id, center and color
+python scan.py plan                                   # reachable views per object (no motion)
+python scan.py scan --execute --reuse-survey          # every object found (or --objects 0,2); about 15 minutes per object
+python scan.py scan --execute --reuse-survey --max-views 16   # about half the time: 16 views spread over all directions
+```
+
+**After scanning (no arm needed):**
+
+```bash
+python scan.py compare                                # measure each mesh and compare with ground_truth.toml (calipers), if it resembles a measured object
+python scan.py reconstruct --objects 1                # rebuild meshes from the saved views: mesh.obj (closed) and observed.obj
+python scan.py progression --objects 1                # meshes, metrics and progression.png from 1, 2, ... n views
+```
+
+**Without a robot:**
+
+```bash
+python -m pytest                                      # 52 tests, about 80s
+python scan.py demo --progression                     # synthetic table scene: survey, plan, render noisy views, reconstruct, score
+```
+
+### 10.4 Commands
 
 | Command | Moves the arm? | What it does |
 |---|---|---|
@@ -859,14 +882,14 @@ The camera mount is a 4 × 4 transform (camera pose relative to the arm's end, i
 | `scan.py calibrate-board [--execute] [--save-mount]` | with `--execute` | ChArUco mat: level check, board views, hand-eye mount and depth error |
 | `scan.py reconstruct [--objects N] [--no-refine]` | no | Re-run reconstruction on saved views |
 | `scan.py progression --objects N [--counts 1,2,5,25] [--order spread\|capture] [--min-views M]` | no | Meshes and metrics for 1..n views |
-| `scan.py compare --objects N --truth NAME` | no | Measure the mesh like calipers and compare with that entry of `ground_truth.toml` |
+| `scan.py compare [--objects N] [--truth NAME]` | no | Measure each mesh like calipers and compare with the `ground_truth.toml` entry it resembles (by shape and size; skipped if none), or with `--truth NAME` |
 | `scan.py touch-off [--execute]` | with `--execute` | Touch bare table with the closed gripper (paper test) to measure the real fingertip reach |
 | `scan.py demo [--progression]` | no | Everything on synthetic data, scored against the truth |
 | `tools/make_figures.py`, `tools/make_tsdf_diagram.py` | no | Regenerate this README's figures and the fusion diagram |
 
 Motion options: `--confirm-moves` previews every move (target, joint changes) and waits for Enter; `--confirm-above 45` previews every move but only waits when a joint would turn 45° or more; `--step` asks before each object and each relocation.
 
-### 10.4 Testing
+### 10.5 Testing
 
 `python -m pytest` runs 52 tests, about 80s. Besides unit tests (pose math against the machine's own numbers, depth decoding, edge filtering, detection, view geometry, grasp poses, the pose guard, ChArUco detection and hand-eye recovery of a known mount), several run the pipeline on synthetic scenes and check it against the truth: fused meshes beat single views, mount calibration recovers a known error, closed meshes have the right volume, and the progression improves with views.
 
