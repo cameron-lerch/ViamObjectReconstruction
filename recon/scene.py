@@ -160,7 +160,9 @@ def merge_fragments(clusters: list[np.ndarray]) -> list[np.ndarray]:
 
 
 def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceConfig,
-                   colors: np.ndarray | None = None) -> list[DetectedObject]:
+                   colors: np.ndarray | None = None, skipped: list[DetectedObject] | None = None) -> list[DetectedObject]:
+    """Scan targets standing on the table. Anything else standing on it (too big, too
+    flat, crowded) is appended to `skipped`: not worth scanning, but still an obstacle."""
     heights = plane.height(points)
     keep = in_workspace(points, workspace) & (heights > workspace.min_object_height) & (heights < workspace.max_object_height)
     cloud = to_cloud(points[keep])
@@ -191,6 +193,8 @@ def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceCo
         if reason:
             log.info("  skipped something at (%.0f, %.0f), %.0f x %.0f x %.0fmm: %s",
                      *center_xy, *candidate.size, reason)
+            if skipped is not None:
+                skipped.append(candidate)
             continue
         objects.append(candidate)
     return objects
@@ -222,8 +226,6 @@ def not_a_target(obj: DetectedObject, points: np.ndarray, heights: np.ndarray, w
     """Why something on the table isn't a scan target ("" if it is one)."""
     if obj.size[2] < workspace.min_object_top:
         return f"under {workspace.min_object_top:.0f}mm tall (a cord or flat clutter)"
-    if obj.size[0] > workspace.max_object_size:
-        return f"over {workspace.max_object_size:.0f}mm across"
     support = table_support(obj, points, heights, outer=workspace.clear_margin)
     if support < workspace.min_table_support:
         return (f"not in open table (only {support:.0%} of the {workspace.clear_margin:.0f}mm around it is bare table): "
@@ -246,6 +248,12 @@ def merge_views(detections: list[tuple[np.ndarray, list[DetectedObject]]], gap: 
         if all(np.linalg.norm(obj.center[:2] - other.center[:2]) > other.footprint_radius + gap for other in kept):
             kept.append(obj)
     return [DetectedObject(index, o.center, o.size, o.yaw_deg, o.n_points, o.color) for index, o in enumerate(kept)]
+
+
+def clutter_around(objects: list[DetectedObject], skipped: list[DetectedObject], gap: float = 15.0) -> list[DetectedObject]:
+    """The skipped things that aren't part of (or a fragment of) a scan target."""
+    return [c for c in skipped
+            if all(np.linalg.norm(c.center[:2] - o.center[:2]) > o.footprint_radius + gap for o in objects)]
 
 
 def color_name(rgb) -> str:

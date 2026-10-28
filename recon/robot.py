@@ -102,6 +102,7 @@ class Robot:
         self.motion = MotionClient.from_robot(machine, names.motion)
         self._intrinsics: Intrinsics | None = None
         self.table_plane: TablePlane | None = None
+        self.clutter: list[DetectedObject] = []  # things on the table that aren't scan targets
         # Off only for touch-off, which has to come close to the table on purpose.
         self.use_table_slab = True
         self._camera_mount: np.ndarray | None = None
@@ -114,6 +115,11 @@ class Robot:
         """Use the table as perception measured it, in addition to the machine's configured
         table, which may sit lower than the real one."""
         self.table_plane = plane
+
+    def set_scene(self, plane: TablePlane, clutter: list[DetectedObject]) -> None:
+        """The measured table, plus everything else standing on it, as obstacles for every plan."""
+        self.set_measured_table(plane)
+        self.clutter = list(clutter)
 
     def table_slab(self) -> list[Geometry]:
         """The table as an obstacle whose top sits a safety margin ABOVE the measured surface.
@@ -213,9 +219,10 @@ class Robot:
 
     def world_state(self, obstacles: list[DetectedObject], margin: float,
                     carried: tuple[DetectedObject, np.ndarray] | None = None) -> WorldState | None:
-        """Detected objects and the measured table as obstacles, plus an object held in
-        the gripper (with its pose relative to the gripper)."""
+        """Detected objects, the clutter around them and the measured table as obstacles,
+        plus an object held in the gripper (with its pose relative to the gripper)."""
         geometries = [box_geometry(obj, margin, f"object-{obj.id}") for obj in obstacles]
+        geometries += [box_geometry(obj, margin, f"clutter-{obj.id}") for obj in self.clutter]
         if self.table_plane is not None and self.use_table_slab:
             geometries += self.table_slab()
         transforms = []

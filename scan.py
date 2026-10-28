@@ -27,7 +27,8 @@ from scipy.spatial.transform import Rotation
 
 from recon import pipeline, synthetic
 from recon.config import Config, load_config
-from recon.measure import compare, load_truth, match_truth, measure
+from recon.measure import compare, identify, load_truth, measure
+from recon.figures import doubling_counts, progression_figure
 from recon.progression import progression, shape_error
 from recon.progression import table as progression_table
 from recon.reconstruct import object_mask, surface_distances
@@ -42,13 +43,13 @@ from recon.views import generate_candidates, order_for_travel
 log = logging.getLogger("scan")
 
 
-def selected(objects, wanted: list[int | str] | None):
-    """Objects by id or by color name (`--objects 1,green`)."""
-    return [obj for obj in objects if wanted is None or obj.id in wanted or obj.color_name in wanted]
+def selected(objects, wanted: list[int] | None):
+    """Objects by the ids the survey gave them (all of them without `--objects`)."""
+    return [obj for obj in objects if wanted is None or obj.id in wanted]
 
 
-def object_list(text: str) -> list[int | str]:
-    return [int(v) if v.strip().isdigit() else v.strip().lower() for v in text.split(",")]
+def object_list(text: str) -> list[int]:
+    return [int(v) for v in text.split(",")]
 
 
 async def run_robot(args, config: Config) -> None:
@@ -75,10 +76,11 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
     if args.command == "touch-off":
         session = Session.latest(config.resolve(config.data_dir))
         objects, plane = session.load_scene()
-        robot.set_measured_table(plane)
+        robot.set_scene(plane, session.load_clutter())
         board = session.read().get("board")
         log.info("Using the survey in %s", session.root)
-        result = await touch_off(robot, objects, plane, config, args.execute, board["center"] if board else None)
+        survey_points = pipeline.scene_points(sorted(session.survey_dir.glob("view_*")), config)
+        result = await touch_off(robot, objects, plane, config, args.execute, board["center"] if board else None, survey_points)
         if result:
             path = config.resolve(config.machine.touch_off_file or "calibration/touch_off.json")
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,6 +92,10 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
                          result["extra_reach_mm"])
             else:
                 log.info("The model covers the real fingertips; the table margin stays at %.0fmm.", config.workspace.table_safety_margin)
+            tilt = result["table_vs_camera"]
+            if tilt:
+                log.info("The table the arm touched vs the camera's table: tilted %.2fdeg (%.2fmm per 100mm); the reach spread above includes this.",
+                         tilt["tilt_deg"], tilt["tilt_mm_per_100mm"])
             log.info("Saved to %s", path)
         return
     if args.command == "calibrate-board":
@@ -111,7 +117,7 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
     if reuse:
         session = Session.latest(config.resolve(config.data_dir))
         objects, plane = session.load_scene()
-        robot.set_measured_table(plane)
+        robot.set_scene(plane, session.load_clutter())
         log.info("Using survey from %s", session.root)
     else:
         session = Session.create(config.resolve(config.data_dir))
@@ -127,6 +133,12 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
         else:
             await pipeline.scan_object(robot, session, obj, others, plane, config, args.execute, args.step,
                                        args.max_views)
+    if args.command == "scan" and args.execute:
+        await pipeline.go_home(robot, session, config)
+        # Meshes and figures only after the arm is parked: they take a while and need no robot.
+        for obj in selected(objects, args.objects):
+            if session.views_dir(obj.id).exists():
+                pipeline.finish_object(session, obj.id, plane, config)
     if args.command == "scan" and not args.execute:
         log.info("Planning only. Add --execute to move the arm (and --step to confirm each object).")
 
@@ -191,13 +203,15 @@ def run_compare(args, config: Config) -> None:
         folder = session.recon_dir(obj.id)
         if not (folder / "mesh.ply").exists():
             continue
-        scanned = pipeline.scanned_object(session, obj.id)
-        name = args.truth or match_truth(truth, scanned.color_name or obj.color_name)
-        if name is None:
-            log.info("Object %d (%s): no matching ground truth; pass --truth NAME", obj.id, obj.color_name or "no color")
-            continue
-        entry = truth[name]
         mesh = o3d.io.read_triangle_mesh(str(folder / "mesh.ply"))
+        name = args.truth
+        if name is None:
+            name, _, why = identify(mesh, truth)
+            if name is None:
+                log.info("Object %d %s: no similar object in %s; skipped", obj.id, why, args.truth_file)
+                continue
+            log.info("Object %d %s: comparing with %s", obj.id, why, name)
+        entry = truth[name]
         measured = measure(mesh, entry["shape"])
         rows = compare(measured, entry)
         lines = [f"  {key:9s} {got:7.2f}mm  vs {want:6.2f}mm  {error:+6.2f}mm ({100 * error / want:+.1f}%)"
@@ -221,6 +235,9 @@ def run_progression(args, config: Config) -> None:
                            min_views=args.min_views)
         log.info("Object %d, 1 to %d views (%s order):\n%s\nMeshes and summary.csv in %s",
                  obj.id, len(views), args.order, progression_table(rows), folder)
+        counts = args.counts or doubling_counts(len(views))
+        progression_figure(folder, session.object_dir(obj.id) / "progression.svg",
+                           f"Object {obj.id}: reconstruction from 1 to {len(views)} views", sorted(c for c in counts if c <= len(views)))
 
 
 def run_demo(config: Config, with_progression: bool = False) -> None:
@@ -279,11 +296,11 @@ def main() -> None:
                         help="show every move, but only ask when some joint turns at least DEG degrees")
     parser.add_argument("--max-views", type=int, help="scan: capture only the first N views of each object (top first)")
     parser.add_argument("--reuse-survey", action="store_true", help="scan: use the latest survey instead of surveying again")
-    parser.add_argument("--objects", type=object_list, help="object ids or color names, e.g. 0,2 or green,yellow")
+    parser.add_argument("--objects", type=object_list, help="object ids from the survey, e.g. 0,2 (default: all)")
     parser.add_argument("--new-survey", action="store_true", help="plan: survey again instead of using the latest")
     parser.add_argument("--session", help="reconstruct: session folder (default: latest)")
     parser.add_argument("--no-refine", action="store_true", help="reconstruct: use arm poses without ICP refinement")
-    parser.add_argument("--truth", help="compare: the ground_truth.toml entry to compare with (default: by color)")
+    parser.add_argument("--truth", help="compare: the ground_truth.toml entry to compare with")
     parser.add_argument("--truth-file", default="ground_truth.toml", help="compare: caliper measurements")
     parser.add_argument("--save-mount", action="store_true",
                         help="calibrate, calibrate-board: use the result as the camera mount for all moves and captures")

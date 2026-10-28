@@ -1,16 +1,14 @@
-# Caliper measurements of the test objects (mm), used by `scan.py compare`.
+# Caliper measurements of the test objects (mm), used by `scan.py compare --objects N --truth NAME`.
 # `width` and `length` are the two horizontal sides of a block standing upright;
 # the top-level values are the averages of the measurements listed with them.
 
 [green_cylinder]
-color = "green"
 shape = "cylinder"
 diameter = 29.53
 height = 59.93
 measured = { diameter = [29.51, 29.55, 29.52], height = [59.93] }  # top, middle, bottom
 
 [yellow_block]
-color = "yellow"
 shape = "box"
 width = 29.26
 length = 29.48
@@ -18,7 +16,6 @@ height = 60.05
 measured = { width = [29.28, 29.26, 29.25], length = [29.45, 29.48, 29.52], height = [60.02, 60.08] }
 
 [orange_block]
-color = "orange"
 shape = "box"
 width = 29.73
 length = 29.63
@@ -26,7 +23,6 @@ height = 60.05
 measured = { width = [29.71, 29.77, 29.71], length = [29.66, 29.56, 29.68], height = [60.02, 60.08] }
 
 [red_block]
-color = "red"
 shape = "box"
 width = 30.15
 length = 29.18

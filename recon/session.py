@@ -55,8 +55,13 @@ class Session:
         data.update(values)
         (self.root / "session.json").write_text(json.dumps(data, indent=2))
 
-    def save_scene(self, objects: list[DetectedObject], plane: TablePlane) -> None:
-        self.update(plane=plane.to_dict(), objects=[obj.to_dict() for obj in objects])
+    def save_scene(self, objects: list[DetectedObject], plane: TablePlane, clutter: list[DetectedObject] = ()) -> None:
+        self.update(plane=plane.to_dict(), objects=[obj.to_dict() for obj in objects],
+                    clutter=[obj.to_dict() for obj in clutter])
+
+    def load_clutter(self) -> list[DetectedObject]:
+        """Things on the table that aren't scan targets (obstacles all the same)."""
+        return [DetectedObject.from_dict(o) for o in self.read().get("clutter", [])]
 
     def load_scene(self) -> tuple[list[DetectedObject], TablePlane]:
         data = self.read()

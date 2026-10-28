@@ -13,12 +13,14 @@ import numpy as np
 from .board import BoardSpec, depth_model, detect, hand_eye, locate_flat
 from .calibrate import MountCalibration, apply_mount, calibrate_mount
 from .config import Config
+from .figures import doubling_counts, progression_figure
 from .planner import ScanPlan, plan_scan
+from .progression import progression
 from .reconstruct import reconstruct, save_reconstruction
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
 from .rgbd import back_project, load_view, load_views, save_view
 from .robot import Robot
-from .scene import DetectedObject, TablePlane, detect_objects, fit_table_plane, merge_views
+from .scene import DetectedObject, TablePlane, clutter_around, detect_objects, fit_table_plane, merge_views
 from .session import Session
 from .transforms import look_at
 
@@ -49,9 +51,23 @@ def scene_points(folders, config: Config) -> np.ndarray:
     return np.concatenate(clouds)
 
 
+async def go_home(robot: Robot, session: Session, config: Config) -> None:
+    """Park the camera straight above the calibration mat at survey height (a pose
+    like every survey view), so each run ends in the same, known-safe place."""
+    board = session.read().get("board")
+    if not board:
+        log.info("No calibration mat in this session's survey; leaving the arm where it is")
+        return
+    x, y, _ = board["center"]
+    log.info("Returning home: camera above the calibration mat at (%.0f, %.0f)", x, y)
+    await move_camera_looking_down(robot, x, y, config.workspace.survey_height, robot.world_state([], 0.0))
+
+
 def survey_grid(config: Config) -> dict[tuple[int, int], np.ndarray]:
     """Overhead camera positions over the search region, keyed by (column, row), skipping
-    the arm's base. With `[workspace] survey_positions` set, those are used instead."""
+    only positions right over the arm's base (the camera may look at table near the
+    base: the scan targets aren't there, but their surroundings and obstacles can be).
+    With `[workspace] survey_positions` set, those are used instead."""
     workspace = config.workspace
     if workspace.survey_positions:
         return {(k, 0): np.array(p, dtype=float) for k, p in enumerate(workspace.survey_positions)}
@@ -62,7 +78,7 @@ def survey_grid(config: Config) -> dict[tuple[int, int], np.ndarray]:
     for i in range(nx):
         for j in range(ny):
             x, y = x0 + (i + 0.5) * (x1 - x0) / nx, y0 + (j + 0.5) * (y1 - y0) / ny
-            if np.hypot(x, y) >= workspace.min_base_distance + 50:
+            if np.hypot(x, y) >= workspace.base_clearance:
                 cells[(i, j)] = np.array([x, y, workspace.survey_height])
     return cells
 
@@ -144,24 +160,31 @@ async def survey(robot: Robot, session: Session, config: Config, execute: bool) 
 
     # Detect in each view on its own: with camera calibration error, the views
     # disagree by several millimeters, and merging their clouds smears objects.
-    detections, planes = [], []
+    detections, skipped, planes = [], [], []
     for folder in folders:
         view = load_view(folder)
         points, colors, _ = back_project(view, 2, config.camera.min_depth, config.camera.max_depth)
         view_plane = fit_table_plane(points, config.workspace)
-        detections.append((view.camera_position[:2], detect_objects(points, view_plane, config.workspace, colors)))
+        others: list[DetectedObject] = []
+        detections.append((view.camera_position[:2], detect_objects(points, view_plane, config.workspace, colors, others)))
+        skipped.append((view.camera_position[:2], others))
         planes.append(view_plane)
     objects = merge_views(detections)
+    clutter = clutter_around(objects, merge_views(skipped))
     # Keep the table as seen by the camera closest to the objects.
     middle = np.mean([obj.center[:2] for obj in objects], axis=0) if objects else detections[0][0]
     plane = planes[int(np.argmin([np.linalg.norm(camera_xy - middle) for camera_xy, _ in detections]))]
-    session.save_scene(objects, plane)
-    robot.set_measured_table(plane)
+    session.save_scene(objects, plane, clutter)
+    robot.set_scene(plane, clutter)
     session.update(intrinsics=(await robot.intrinsics()).__dict__, config=config.to_dict())
     log.info("Table at z=%.1fmm (tilt %.2fdeg); found %d object(s)", plane.z_at(*middle),
              np.degrees(np.arccos(plane.normal[2])), len(objects))
     for obj in objects:
         log.info("  %s", obj.describe())
+    if clutter:
+        log.info("%d other thing(s) on the table, kept as obstacles:", len(clutter))
+        for thing in clutter:
+            log.info("  (%.0f, %.0f), %.0f x %.0f x %.0fmm", *thing.center[:2], *thing.size)
 
     board = find_board(folders, BoardSpec())
     if board is None:
@@ -312,8 +335,6 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
         else:
             await execute_pick_and_place(robot, back, others, config)
 
-    reconstruct_object(session, obj.id, plane, config)
-
 
 def scanned_object(session: Session, object_id: int) -> DetectedObject:
     """The object as it was when scanned (it may have been moved to a station)."""
@@ -363,6 +384,29 @@ def reconstruct_object(session: Session, object_id: int, plane: TablePlane, conf
     log.info("  mesh: %d triangles; single views deviate %.2fmm (median) from it -> %s",
              result.report["mesh"]["triangles"], deviation or float("nan"), session.recon_dir(object_id))
     return result
+
+
+def progression_snapshot(session: Session, object_id: int, plane: TablePlane, config: Config,
+                         refine: bool = True) -> Path:
+    """Meshes from 1, 2, 4, ... all views (spread out) and a figure of them, saved with
+    the object's results: object_NN/progression.svg (and .png)."""
+    obj = scanned_object(session, object_id)
+    views = apply_session_calibration(session, load_views(session.views_dir(object_id)))
+    folder = session.recon_dir(object_id) / "progression"
+    counts = doubling_counts(len(views))
+    progression(views, obj, plane, config, folder, counts, refine=refine)
+    svg = session.object_dir(object_id) / "progression.svg"
+    named = f" ({obj.color_name})" if obj.color_name else ""
+    progression_figure(folder, svg, f"Object {object_id}{named}: reconstruction from 1 to {len(views)} views", counts)
+    log.info("  progression figure: %s", svg.with_suffix(".png") if svg.with_suffix(".png").exists() else svg)
+    return svg
+
+
+def finish_object(session: Session, object_id: int, plane: TablePlane, config: Config, refine: bool = True) -> None:
+    """Everything offline after an object's views are captured: its mesh, then the
+    progression figure."""
+    reconstruct_object(session, object_id, plane, config, refine)
+    progression_snapshot(session, object_id, plane, config, refine)
 
 
 async def search_for_board(robot: Robot, session: Session, config: Config, spec: BoardSpec,

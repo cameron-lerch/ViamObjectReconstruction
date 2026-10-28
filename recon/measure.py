@@ -21,12 +21,6 @@ def load_truth(path: Path) -> dict:
         return tomllib.load(file)
 
 
-def match_truth(truth: dict, color: str) -> str | None:
-    """The ground-truth entry with this color name, if exactly one has it."""
-    names = [name for name, entry in truth.items() if entry.get("color") == color]
-    return names[0] if len(names) == 1 else None
-
-
 def measure(mesh: o3d.geometry.TriangleMesh, shape: str) -> dict:
     """Height, plus width and length (box) or diameter (cylinder), of an upright object.
 
@@ -41,14 +35,46 @@ def measure(mesh: o3d.geometry.TriangleMesh, shape: str) -> dict:
         def gaps(c):
             return np.hypot(band[:, 0] - c[0], band[:, 1] - c[1]) - c[2]
         fit = least_squares(gaps, [*band[:, :2].mean(axis=0), 15.0], loss="soft_l1", f_scale=0.5)
-        result |= {"diameter": float(2 * fit.x[2]), "roundness": float(np.median(np.abs(gaps(fit.x))))}
+        result |= {"diameter": float(2 * fit.x[2]), "fit_mm": float(np.median(np.abs(gaps(fit.x))))}
     else:
         center, _, yaw = min_area_rectangle(band[:, :2])
         c, s = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
         local = (band[:, :2] - center) @ np.array([[c, -s], [s, c]])
-        extents = np.percentile(local, 99, axis=0) - np.percentile(local, 1, axis=0)
-        result |= {"length": float(extents.max()), "width": float(extents.min())}
+        low, high = np.percentile(local, 1, axis=0), np.percentile(local, 99, axis=0)
+        extents = high - low
+        middle, half = (high + low) / 2, extents / 2
+        # Distance from each point to the nearest side of the rectangle.
+        to_side = np.min(np.abs(half - np.abs(local - middle)), axis=1)
+        result |= {"length": float(extents.max()), "width": float(extents.min()), "fit_mm": float(np.median(to_side))}
     return result
+
+
+def identify(mesh: o3d.geometry.TriangleMesh, truth: dict, tolerance_mm: float = 5.0,
+             tolerance_share: float = 0.15) -> tuple[str | None, dict, str]:
+    """Which ground-truth object (if any) this mesh looks like: (name, measurements, why).
+
+    The shape is whichever of block and cylinder fits the mesh's middle band
+    more closely; then every measured dimension of a truth entry with that
+    shape must agree within `tolerance_mm` or `tolerance_share`, whichever is
+    larger (loose: the real meshes come out about 3mm wider than the calipers
+    say, which is what the comparison is meant to show). Of several matches (two blocks of nearly the same size) the closest
+    wins; anything else (a pumpkin, a bottle with no entry) gets None.
+    """
+    fits = {shape: measure(mesh, shape) for shape in ("box", "cylinder")}
+    shape = min(fits, key=lambda name: fits[name]["fit_mm"])
+    measured = fits[shape]
+    best, best_error = None, np.inf
+    for name, entry in truth.items():
+        if entry.get("shape") != shape:
+            continue
+        rows = compare(measured, entry)
+        if rows and all(abs(error) <= max(tolerance_mm, tolerance_share * true) for _, _, true, error in rows):
+            total = sum(abs(error) for *_, error in rows)
+            if total < best_error:
+                best, best_error = name, total
+    size = " x ".join(f"{measured[k]:.1f}" for k in ("diameter", "width", "length", "height") if k in measured)
+    why = f"looks like a {'cylinder' if shape == 'cylinder' else 'block'}, {size}mm"
+    return best, measured, why
 
 
 def compare(measured: dict, truth: dict) -> list[tuple[str, float, float, float]]:

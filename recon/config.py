@@ -48,14 +48,14 @@ class WorkspaceConfig:
     # top must reach `min_object_top`, which rejects sensor noise on the table.
     min_object_height: float = 8.0
     min_object_top: float = 25.0
-    # Scan targets are at most this wide and stand in open table: at least
-    # min_table_support of the clear_margin around their footprint is bare table.
-    # Cords at the table's edge, power strips and things in gaps between tables
-    # aren't; two objects closer than clear_margin would reject each other.
-    max_object_size: float = 150.0
+    # Scan targets, of any size, stand in open table: at least min_table_support
+    # of the clear_margin around their footprint is bare table. Cords at the
+    # table's edge, power strips and things in gaps between tables aren't; two
+    # objects closer than clear_margin would reject each other. Whether a target
+    # can be scanned all around is up to the view planner.
     clear_margin: float = 60.0
     min_table_support: float = 0.9
-    max_object_height: float = 250.0
+    max_object_height: float = 500.0
     min_object_points: int = 100
     cluster_distance: float = 10.0
     table_distance: float = 4.0
