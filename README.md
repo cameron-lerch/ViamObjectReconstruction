@@ -35,7 +35,7 @@ Put the machine's API key in `apikey.json` as `{"key": "...", "key_id": "..."}` 
 python calibration.py
 ```
 
-It asks once before the arm moves, then finds the mat and calibrates the camera, surveys the table, and asks whether to run the touch-off (you at the arm, with a sheet of paper). `python calibration.py --plan-only` plans every step without moving.
+It asks once before the arm moves, then finds the mat and calibrates the camera, surveys the table, and (when a gripper is mounted) asks whether to run the touch-off (you at the arm, with a sheet of paper). `python calibration.py --plan-only` plans every step without moving.
 
 **3. Scan**
 
@@ -43,7 +43,7 @@ It asks once before the arm moves, then finds the mat and calibrates the camera,
 python scan.py
 ```
 
-It asks once before the arm moves, surveys the table, lists the objects it found (with their centers, sizes and colors), and asks before scanning each one. When it's done, the arm parks over the mat and every mesh and figure is built. `python scan.py --plan-only` plans without moving; `--max-views 16` scans in about half the time.
+It asks once before the arm moves, surveys the table, lists the objects it found (with their centers, sizes and colors), and asks before scanning each one. When it's done, the arm parks over the mat and every mesh and figure is built. While it runs, open the printed link (`http://localhost:8765`) to watch the scan live, with Pause and Stop buttons ([§5.12](#512-watching-a-scan-live)). `python scan.py --plan-only` plans without moving; `--max-views 16` scans in about half the time; `--full-scan` takes 50 frames per view and keeps every raw frame (a dataset to subsample later; about 2 minutes per view).
 
 **4. Results** are in `data/<session>/object_NN/`: `recon/mesh.obj` (the closed model), `recon/observed.obj` (only what was measured) and `progression.png` (the model from 1 to all views). Open the meshes in Blender; units are millimeters, so scale the import by 0.001.
 
@@ -399,11 +399,11 @@ Each view costs a move, 0.6s to settle, one color-only frame to read the camera'
 ### 5.2 View planning and reachability
 
 <p align="center">
-  <img src="media/diagrams/view_planning.png" alt="Side view: a top view plus rings at 72°, 50° and 25° elevation around the object, all aimed at a point 40% up the object, at a standoff of 280mm plus the object's radius" width="900">
+  <img src="media/diagrams/view_planning.png" alt="Side view: a top view plus rings at 72°, 50°, 25° and 15° elevation around the object, all aimed at a point 40% up the object, at a standoff of 280mm plus the object's radius; 49 candidates; no view puts the camera under 80mm above the table" width="900">
   <br><sub><b>DIAGRAM.</b> The planned view layout (the layout used on the arm)</sub>
 </p>
 
-Every candidate pose is sent to Viam's builtin motion service as a **plan-only** request (`do_command({"plan": ...})`). That runs the real planner (inverse kinematics, joint limits, and collisions with the configured table and walls, every detected object, and the measured table) without moving anything. The planner targets the **camera frame** directly, so no camera-to-gripper math is needed. Coverage is scored over about 350 surface directions (the bottom excluded); below 85%, the object would be relocated.
+Every candidate pose is sent to Viam's builtin motion service as a **plan-only** request (`do_command({"plan": ...})`). That runs the real planner (inverse kinematics, joint limits, and collisions with the configured table and walls, every detected object, and the measured table) without moving anything. The planner targets the **camera frame** directly, so no camera-to-gripper math is needed. The 15° ring became a default on 2026-10-29: on rounded objects (the pumpkin, the printed sphere) the surface below the widest point is only seen head-on from low views. Views that would put the camera under 80mm above the table (`min_camera_height`) are dropped before planning, a guard independent of the planner's table model; for a 30mm-tall block the 15° ring's camera is about 91mm up. Coverage is scored over about 350 surface directions (the bottom excluded); below 85%, the object would be relocated.
 
 ### 5.3 Relocation
 
@@ -411,7 +411,7 @@ If coverage is too low, the planner looks for a free scan station where the obje
 
 ### 5.4 Stop-and-go capture
 
-At each view: move, wait until the arm reports it has stopped, wait 0.6s more, then take 5 frames and keep the per-pixel median depth. Frames count only if the camera **stamped them after the settle time, by the robot's own clock**, so nothing captured while moving can slip in. The camera pose is read after settling and checked against the arm controller ([§11](#11-working-safely-on-a-shared-real-arm)). Each view is saved as `color.jpg`, `depth.png` (16-bit millimeters) and `view.json` (pose, joints, timestamps, camera mount).
+At each view: move, wait until the arm reports it has stopped, wait 0.6s more, then take 5 frames and keep the per-pixel median depth. Frames count only if the camera **stamped them after the settle time, by the robot's own clock**, so nothing captured while moving can slip in. The camera pose is read after settling and checked against the arm controller ([§11](#11-working-safely-on-a-shared-real-arm)). Each view is saved as `color.jpg`, `depth.png` (16-bit millimeters) and `view.json` (pose, joints, timestamps, camera mount). Storing depth as 16-bit millimeters is the usual format (the RealSense tools and RGB-D datasets do the same), but a regular image viewer shows 300-600mm as 0.5-1% of full brightness, almost black. So each view also gets a `depth_preview.jpg` for looking at: colored near-red to far-blue by each pixel's rank among that image's depths (histogram equalization, as the RealSense Viewer does), with missing readings in black. Nothing reads it; `tools/depth_previews.py` adds them to older sessions.
 
 ### 5.5 Placing each view in the world
 
@@ -515,6 +515,9 @@ The board mount hasn't replaced the scan-based mount yet (that is `--save-mount`
 
 #### The gripper: touch-off
 
+> [!NOTE]
+> The gripper was taken off on 2026-10-29 (`[machine] gripper = ""`): without it the camera reaches many more views. The touch-off is off until a gripper is back ([§15.8](#158-also)); the code and the measurements below are kept.
+
 The planner keeps the gripper off the table using the gripper's collision model in the machine config (on armfarm14: a case and a claws box reaching 50mm past the gripper frame). If the real fingertips reach further than that, the planner can drive them into the table. `scan.py touch-off` measures the real reach the way machinists set up a tool:
 
 1. **Three spots.** On a 20mm grid over the search region, a spot qualifies if it is 120mm clear of everything the survey saw standing on the table (scan targets and clutter; the open claws are 170mm wide), clear of the board, and the survey saw bare table over a 40mm disc around it (not past the table's edge or somewhere it never looked). The three are picked spread out, and must be reachable for step 2.
@@ -617,9 +620,9 @@ Every setting that changes how smooth and how accurate the final mesh is, in pip
 | `capture.frames_per_view` | 5 | More frames: less per-pixel noise (median), slower views | judgment |
 | `capture.settle_s` | 0.6s | Longer: less vibration blur, slower scans | judgment |
 | `views.standoff` † | 280mm + object radius | Closer: more pixels on the object and less noise (it grows with distance²), but the camera can't measure closer than about 260mm | judgment |
+| `capture.full_scan_frames` (`--full-scan`) | 50 | Frames per view in a full scan, every one saved; 50 frames take about 2 minutes per view over the cloud connection | judgment (a dataset to subsample) |
 | `views.min_camera_height` | 80mm | No planned view puts the camera lower than this above the table: a second guard besides the planner's table slab | judgment |
-| `views.low_ring_deg`, `--low-ring` | 15°, off | Adds a ring for objects whose lower half curves in (a sphere, a pumpkin); the camera stays above `min_camera_height`. For a 60mm sphere it puts the camera about 110mm up, against 164mm at 25° | judgment |
-| `views.elevations_deg`, `views.azimuth_step_deg`, `--max-views` | 25/50/72°, 30° (37 views) | More views: more averaging and coverage, longer scans | **real**: 16 spread views measured every side ([§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views)) |
+| `views.elevations_deg`, `views.azimuth_step_deg`, `--max-views` | 15/25/50/72°, 30° (49 candidates; 25/50/72° until 2026-10-29) | More views: more averaging and coverage, longer scans | **real**: 16 spread views measured every side ([§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views)) |
 | RealSense presets and filters † | camera defaults | "High Accuracy" preset, spatial/temporal filters: smoother depth, fewer readings | not explored yet |
 
 **Cleaning each view**
@@ -663,6 +666,23 @@ Every setting that changes how smooth and how accurate the final mesh is, in pip
 | `reconstruct.footprint_shrink`, `base_band` | 1mm, 5mm | How the flat bottom and the flared base are handled | **real** (the base's flared pixels) |
 
 ---
+
+### 5.12 Watching a scan live
+
+<p align="center">
+  <img src="media/images/live_viewer.png" alt="The live viewer in a browser: a status bar with Pause, End Scan and STOP; the bowl's mesh in 3D; that view's point cloud; the latest depth image, colored near-red to far-blue; and a panel for the monitoring camera" width="1000">
+  <br><sub><b>REAL DATA.</b> The printed bowl's scan (2026-10-29) replayed with <code>tools/viewer.py</code></sub>
+</p>
+
+Every arm run (`scan.py`, `calibration.py`) starts a small web server on this computer and prints its link, `http://localhost:8765`. The page follows the scan:
+
+- **Mesh so far**, in 3D (drag to rotate, scroll to zoom): after each view is captured, it is fused into a TSDF of its own on the GPU (about 0.2s per view), while the arm moves on, so the scan takes no longer. It shows surface seen by 2 or more views, as the final mesh keeps, placed by the arm's poses (the final alignment still runs at the end).
+- **Point cloud**, in 3D: the latest view's points near the object, in their camera colors, or every view so far, thinned to one point per 2mm.
+- **Scan camera**: the latest capture (survey, board or scan view), as color or as the colored depth preview.
+- **Monitoring camera**: an optional second camera that watches the whole cell (any Viam camera component, `[live] monitor_camera`), about one frame per second.
+- **Pause** holds the arm still before its next move; **End Scan** ends the run before the next move (after a confirmation, keeping every view captured so far); **STOP** halts the arm at once, mid-move (`arm.stop()`), with no confirmation. They act inside the one function every move goes through, so they work during the survey, calibration and scanning alike. The e-stop remains the real safety.
+
+Everything stays on this computer: the scan writes a few preview files into `data/live/` (the mesh, a few MB; the points, under 3MB; two images), and the page fetches whichever changed about once a second. The server only listens on this computer, serves only those files, and is built from Python's standard library (no new dependencies); the page uses three.js from a CDN. `python tools/viewer.py data/<session>` replays a finished scan view by view, ending on its final closed mesh, with the buttons off.
 
 ## 6. Measured vs. Filled In
 
@@ -750,6 +770,7 @@ In roughly the order I ran into them. Each was found by measuring, and the numbe
 | A view-count threshold of 2.0 in the `VoxelBlockGrid` | Extraction keeps weights strictly *above* the threshold, so "at least 2 views" really meant "at least 3". The real meshes had more holes than they should have. | `min_views` (an integer) passed as `min_views − 0.5`. The real 25-view surface grew from 4,237 to 7,386 triangles. |
 | Widening the edge filter (drop pixels within 5px of a depth edge) | Pixels with no depth reading (dropouts, a few percent, scattered) counted as "edges", so widening the filter spread holes across whole surfaces. On the real cylinder that looked like an improvement (31.6mm) because it threw away wall pixels; on synthetic data the 1-view mesh shrank to 25 triangles. | Dropouts are never edges. Measured properly, the filter's whole benefit comes from its first 2 pixels (32.62 → 32.22mm), so that is the default. |
 | A measured-table obstacle around each object, 3mm *below* the surface | The gripper hit the table moving between two views of the lowest (25°) ring; the run was stopped with the e-stop. At both views' end poses the gripper's model is 62-158mm above the table, so the contact was during the move, while the wrist swung around. The planner's table protection then was the configured table (6-11mm below the real one) plus patches only ±165mm around the object, placed a little below the surface. | A slab over the whole table, 15mm *above* the measured surface, checked along every path; and a touch-off to measure the real fingertip reach ([§5.6](#56-camera-calibration)). |
+| Starting a run from wherever the arm was left (2026-10-29) | After the gripper came off, the arm had been free-moved by hand into a pose with joint 4 (the forearm roll) at 290°. The calibration's first move, a planned move to the usual camera-down view of the mat, turned joint 4 by 290° while every other joint turned 40-80°, all at once. The arm moved very fast, away from the person beside it, until the xArm controller stopped it: "Linear speed exceeds limit in ServoJ mode". The target was the same pose that had worked in four earlier runs; the start was the problem. | Every run that moves the arm now reads the joints first and steps to a fixed ready pose one joint group at a time, each step confirmed by the person at the arm. |
 | The first touch-off: straight to each spot, with only the table as an obstacle | On the way to its first spot the gripper went through one of the blocks: the touch-off's moves didn't pass the objects to the planner. Things the survey skipped (not scan targets) weren't obstacles for *any* plan. And with the gripper model 26mm short, the "30mm above the table" start was about 4mm. | Every object, and everything else the survey sees standing on the table, is an obstacle for every plan (clutter is saved with the survey). The touch-off lifts until the fingertips are 600mm above the table, moves over a spot with 120mm of bare table around it, and comes straight down to 10mm above the table by the measured reach, then steps 1mm. |
 | Capturing 5 frames within 10s | Each `get_images()` takes 2-4s over the cloud connection (depth alone is 1.8MB). | The timeout is per frame. A view now takes about 20s. |
 | The SDK's default connection check | It allows 1s for a reply; during a 1.8MB download the reply is late, and the SDK closes the channel mid-download. | Turned off for this script. A real disconnect still raises on the next call, and viam-server's session heartbeat (which stops the arm if the client disappears) is unaffected. |
@@ -912,7 +933,7 @@ python scan.py demo --progression                     # synthetic table scene: s
 | Command | Moves the arm? | What it does |
 |---|---|---|
 | `calibration.py [--plan-only] [--touch-off ask\|yes\|no]` | yes (asks first) | The whole calibration: camera (board), table (survey), gripper (touch-off, asks first) |
-| `scan.py [--plan-only] [--max-views K] [--low-ring]` | yes (asks first) | The whole scan: survey, list the objects, ask before each, scan, park over the mat, build meshes and figures, compare with the calipers where possible. `--low-ring` adds a 15° ring for rounded objects |
+| `scan.py [--plan-only] [--max-views K] [--full-scan]` | yes (asks first) | The whole scan: survey, list the objects, ask before each, scan, park over the mat, build meshes and figures, compare with the calipers where possible. `--full-scan`: 50 frames per view and every raw frame saved in `views/view_NNN/frames/` (about 10MB per view) |
 | `scan.py survey [--execute]` | with `--execute` | Overhead grid over the table: objects, table plane, calibration board (then a head-on board view); without `--execute`, from the current pose |
 | `scan.py plan [--new-survey]` | no | Reachable views, coverage and relocation decision per object |
 | `scan.py scan --execute [--objects N] [--max-views K] [--reuse-survey]` | yes | Plan, (relocate), capture every object, return home over the mat, then build each mesh and its progression figure. `--max-views K` captures K views spread over all directions (16 is enough to measure every side of the test blocks) |
@@ -921,8 +942,11 @@ python scan.py demo --progression                     # synthetic table scene: s
 | `scan.py reconstruct [--objects N] [--no-refine]` | no | Re-run reconstruction on saved views |
 | `scan.py progression --objects N [--counts 1,2,5,25] [--order spread\|capture] [--min-views M]` | no | Meshes and metrics for 1..n views |
 | `scan.py compare [--objects N] [--truth NAME]` | no | Measure each mesh like calipers and compare with the `ground_truth.toml` entry it resembles (by shape and size; skipped if none), or with `--truth NAME` |
-| `scan.py touch-off [--execute]` | with `--execute` | Touch bare table with the closed gripper (paper test) to measure the real fingertip reach |
+| `scan.py touch-off [--execute]` | with `--execute` | Touch bare table with the closed gripper (paper test) to measure the real fingertip reach (off while no gripper is mounted) |
 | `scan.py demo [--progression]` | no | Everything on synthetic data, scored against the truth |
+| `tools/camera_height_check.py [--height 100] [--execute]` | with `--execute` | A ruler check of the camera mount: the lens straight above the calibration board at a known height, with the predicted heights of the camera's face and of its collision box |
+| `tools/viewer.py data/<session> [--object N]` | no | Replay a finished scan in the live viewer, view by view, ending on its final closed mesh |
+| `tools/depth_previews.py data/<session>` | no | Add colored `depth_preview.jpg` files to a session saved before they existed |
 | `tools/make_figures.py`, `tools/make_tsdf_diagram.py`, `tools/make_ring_diagram.py` | no | Regenerate this README's figures, the fusion diagram and the ring diagram |
 
 Motion options: `--confirm-moves` previews every move (target, joint changes) and waits for Enter; `--confirm-above 45` previews every move but only waits when a joint would turn 45° or more; `--step` asks before each object and each relocation.
@@ -941,9 +965,13 @@ The armfarm cells are shared and remote, so the code assumes that nobody may be 
 - **Every move can be previewed**, with its target and the joint changes from a plan-only check, and waits for Enter. Typing `n` stops cleanly before the move.
 - **Pose guard.** At startup, after every move and at every capture, the arm's end pose according to Viam's frame system is compared with the arm controller's own. If they disagree by more than 2mm or 1°, the run stops before any further motion. (An earlier version compared camera poses, and caught a 40° camera-configuration error before the first move; camera poses now come from our own mount file.)
 - **The table is a slab 15mm above where it was measured.** The machine's configured table sat 6-11mm below the real one. Every plan (including the paths between views, not just their end points) treats the table as a slab over the whole search region, its top 15mm above the measured surface at its highest point (plus any extra fingertip reach found by the touch-off), with a 200mm square cut out around the arm's base. An earlier version added the measured table only around each object and slightly *below* its surface, and the gripper hit the table while moving between two of the lowest (25°) views; see [§8.1](#81-hardware-and-platform).
+- **The camera has its own collision boxes.** With the gripper off, nothing in the machine's model covered the wrist, and the camera frame configured in the Viam app (with its collision box) sat 44-75mm from the real camera. Every plan now attaches two boxes to the arm's end through our calibrated mount: the camera body (130 x 45 x 45mm, a RealSense plus 20mm all round) and its bracket from the flange (40mm wide). A plan-only test of the camera 30mm above the table was refused by the planner for exactly that: `camera-body-guard` against the table slab. A ruler check (`tools/camera_height_check.py`, 2026-10-29) put the lens 100.4mm above the calibration board by our mount; the camera's front glass measured 95mm (the lens sits a few mm behind it), and the board's thickness from depth, 5.6mm, matched its real 6mm. Plans that used to pass no obstacles (board views, going home) now get the table, the clutter and these boxes too.
 - **Everything on the table is an obstacle**, with a 15mm margin: the scan targets, and anything the survey skipped as a target (too big, too flat, crowded), which is saved with the survey as clutter.
 - **Wrist limit.** Camera rolls that would take the last joint past ±200° are never chosen.
+- **Every run that moves the arm starts at a ready pose.** It reads the arm's joints, and if they aren't already at the ready pose (camera about 320mm over the mat, looking down; `[machine] ready_joints_deg`), steps there one joint group at a time: forearm roll, wrist, shoulder and elbow, then base, each shown and confirmed at the terminal. See the free-move incident in [§8.1](#81-hardware-and-platform).
 - **Ctrl+C sends `arm.stop()`** before disconnecting. The e-stop remains the real safety.
+- **Pause, End Scan and STOP from the live viewer** ([§5.12](#512-watching-a-scan-live)): Pause holds the arm before its next move, End Scan ends the run before the next move, and STOP sends `arm.stop()` immediately, mid-move, without asking. A second camera watching the whole cell can be shown beside the scan.
+- **No view puts the camera under 80mm above the table** (`min_camera_height`), checked before planning and independent of the planner's table slab.
 - **Relocation is off** until the gripper is measured; it hasn't been tested on hardware.
 - **Board level check.** `calibrate-board` refuses to plan views if the mat doesn't look level through the camera mount in use, which is what a wrong mount looks like.
 
@@ -973,16 +1001,21 @@ recon/
   bottom.py              closed mesh: flat bottom, straight-wall prior, Poisson
   progression.py         1..n view comparison and its metrics
   render.py, figures.py  offscreen renders and the figures saved with each scan (and used here)
-  rgbd.py, transforms.py depth decoding and filtering, view files, pose math (Viam conventions)
+  rgbd.py, transforms.py depth decoding and filtering, view files, depth previews, pose math (Viam conventions)
+  live.py                the live viewer: preview fusion, pause/stop, its local web server
   session.py             data/<session>/ layout
   synthetic.py           noisy synthetic RGB-D renderer with a camera-mount error
+web/
+  live.html              the live viewer's page (three.js)
 tools/
+  viewer.py              replay a finished scan in the live viewer
+  depth_previews.py      colored depth previews for older sessions
   render_mesh.py         render meshes to a PNG from the command line
   make_figures.py        this README's result figures
   make_noise_figure.py   one view at a time: color image and raw points per view
   make_tsdf_diagram.py   the fusion diagram
   make_ring_diagram.py   the open-table ring diagram
-tests/                   61 tests, mostly against synthetic ground truth
+tests/                   71 tests, mostly against synthetic ground truth
 media/                   diagrams (SVG + PNG) and figures
 ```
 
@@ -1082,7 +1115,7 @@ The next step is to scan the same objects with an Orbbec Astra 2, which is expec
 ### 15.8 Also
 
 - Scans of objects that aren't blocks: a pumpkin, a can, a water bottle, a roll of tape.
-- Relocation on hardware, with the gripper measured.
+- **A gripper again, for pick and place.** The gripper was taken off (2026-10-29) so the camera reaches more views. With one back: set `[machine] gripper`, run the touch-off again (it measures the real fingertips; the code is kept in `recon/touchoff.py`), measure the grasp width and jaw direction, and test relocation (`recon/relocate.py`, `[relocate] enabled`) on hardware.
 - The stop-and-go vs. continuous capture comparison.
 - Colored meshes (vertex colors are already fused; texture maps would need colored ICP and better color calibration).
 - Package the scanner as a Viam module running next to the arm.

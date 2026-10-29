@@ -87,7 +87,8 @@ def test_full_candidate_set_covers_the_object():
 def test_one_sided_views_fall_short_of_coverage():
     config = Config().views
     obj = make_object()
-    near_side = [c.eye for c in generate_candidates(obj, config) if np.cos(np.radians(c.azimuth_deg)) < 0]
+    # A third of the way around (with the 15deg ring, half the way around already reaches 86%).
+    near_side = [c.eye for c in generate_candidates(obj, config) if np.cos(np.radians(c.azimuth_deg)) < -0.5]
     assert coverage(aim_point(obj, config), near_side, config) < config.min_coverage
 
 

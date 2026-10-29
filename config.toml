@@ -6,7 +6,7 @@ address = "armfarm14-main.310sld03v2.viam.cloud"
 credentials = "apikey.json"   # {"key": "...", "key_id": "..."}, kept out of git
 arm = "arm"
 camera = "cam"
-gripper = "gripper"
+gripper = ""                 # no gripper mounted (2026-10-29); touch-off and relocation are off
 motion = "builtin"
 # Our calibrated camera mount; the camera frame in the Viam app is then only for its 3D scene.
 camera_mount_file = "calibration/armfarm14_camera_mount.json"
@@ -23,11 +23,10 @@ y_range = [-650, 350]
 
 [views]
 standoff = 280               # camera to nearest point of the object
-elevations_deg = [25, 50, 72]
+elevations_deg = [15, 25, 50, 72]
 azimuth_step_deg = 30
 min_coverage = 0.85          # below this, the object is moved to a scan station
 min_camera_height = 80       # no view puts the camera lower than this above the table (mm)
-low_ring_deg = 15            # the extra ring `scan.py --low-ring` adds
 
 [capture]
 settle_s = 0.6               # pause after each move before taking frames
@@ -47,3 +46,9 @@ return_after_scan = true
 [reconstruct]
 voxel = 1.5
 device = "auto"              # CUDA when available
+
+[live]
+# The live viewer (http://localhost:8765 during every arm run; see README 5.12).
+enabled = true
+port = 8765
+monitor_camera = "webcam"    # a Viam camera component watching the whole cell ("" for none)

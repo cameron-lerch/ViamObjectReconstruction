@@ -26,9 +26,12 @@ class Session:
         return cls(root)
 
     @classmethod
-    def latest(cls, data_dir: Path) -> "Session":
+    def latest(cls, data_dir: Path, surveyed: bool = False) -> "Session":
+        ''' The most recently written session; with `surveyed`, the latest one with survey
+        results (a table and objects), skipping board-only and interrupted runs. '''
         files = sorted(Path(data_dir).glob("*/session.json"), key=lambda path: path.stat().st_mtime)
-        sessions = [path.parent for path in files]
+        sessions = [path.parent for path in files
+                    if not surveyed or "plane" in json.loads(path.read_text())]
         if not sessions:
             raise FileNotFoundError(f"No sessions in {data_dir}; run a survey first")
         return cls(sessions[-1])

@@ -3,9 +3,10 @@
 import asyncio
 
 import calibration
+from recon.config import Config
 
 
-def run(monkeypatch, execute=True, touch_off=None, answer=False, board_fails=False):
+def run(monkeypatch, execute=True, touch_off=None, answer=False, board_fails=False, gripper="gripper"):
     calls = []
 
     async def board_step(robot, config, execute, save_mount):
@@ -25,7 +26,9 @@ def run(monkeypatch, execute=True, touch_off=None, answer=False, board_fails=Fal
     monkeypatch.setattr(calibration, "survey_step", survey_step)
     monkeypatch.setattr(calibration, "touch_off_step", touch_off_step)
     monkeypatch.setattr(calibration, "ask", lambda question: answer)
-    asyncio.run(calibration.calibrate_scene(None, None, execute, touch_off))
+    config = Config()
+    config.machine.gripper = gripper
+    asyncio.run(calibration.calibrate_scene(None, config, execute, touch_off))
     return calls
 
 
@@ -46,3 +49,8 @@ def test_plan_only_plans_every_step_and_saves_nothing(monkeypatch):
 
 def test_stops_when_the_board_isnt_found(monkeypatch):
     assert run(monkeypatch, board_fails=True) == [("board", True, True)]
+
+
+def test_no_touch_off_without_a_gripper(monkeypatch):
+    assert [c[0] for c in run(monkeypatch, answer=True, gripper="")] == ["board", "survey"]
+    assert [c[0] for c in run(monkeypatch, execute=False, gripper="")] == ["board", "survey"]

@@ -1,9 +1,9 @@
 ''' Scan the objects on the table and build a 3D mesh of each.
 
     python scan.py                  # the whole scan: asks once before the arm moves, then before each object
-    python scan.py --plan-only      # survey from where the camera is and plan every object (no motion)
+    python scan.py --plan-only      # plan every object on the latest survey (no motion)
     python scan.py --max-views 16   # about half the time: 16 views per object, spread over all directions
-    python scan.py --low-ring       # add a ring of views at 15deg, for rounded objects (sphere, pumpkin)
+    python scan.py --full-scan      # 50 frames per view, every raw frame saved (a dataset; about 2 min per view)
 
 The steps on their own, for troubleshooting (the arm only moves with --execute;
 without it, they look and plan from wherever the arm is now):
@@ -38,6 +38,7 @@ from recon.progression import progression, shape_error
 from recon.progression import table as progression_table
 from recon.reconstruct import object_mask, surface_distances
 from recon.rgbd import back_project, load_views, save_view
+from recon.live import Live
 from recon.robot import MoveDeclined, PoseMismatch, Robot, connect
 from recon.scene import detect_objects, fit_table_plane
 from recon.session import Session
@@ -57,15 +58,23 @@ def object_list(text: str) -> list[int]:
     return [int(v) for v in text.split(",")]
 
 
-async def with_robot(config: Config, steps, confirm_moves: bool = False, confirm_above: float | None = None) -> None:
-    ''' Connect, check the arm's pose, run `steps(robot)`, and stop safely on any interruption. '''
+async def with_robot(config: Config, steps, confirm_moves: bool = False, confirm_above: float | None = None,
+                     go_ready: bool = False) -> None:
+    ''' Connect, check the arm's pose, run `steps(robot)`, and stop safely on any interruption.
+    With `go_ready` (any run that moves the arm), first step to the ready pose (Robot.go_ready). '''
     machine = await connect(config)
     async with machine:
         robot = Robot(machine, config)
         robot.confirm_moves = confirm_moves or confirm_above is not None
         robot.confirm_above_deg = confirm_above
+        if config.live.enabled:
+            robot.live = Live(config, config.resolve(config.data_dir) / "live")
+            robot.live.start_server()
+            robot.live.attach(robot, asyncio.get_running_loop())
         try:
             await robot.checked_camera_pose()
+            if go_ready:
+                await robot.go_ready()
             await steps(robot)
         except MoveDeclined as declined:
             log.info("Stopped: %s. The arm is where it was before that move.", declined)
@@ -76,15 +85,23 @@ async def with_robot(config: Config, steps, confirm_moves: bool = False, confirm
             log.warning("Interrupted; stopping the arm")
             await robot.arm.stop()
             raise
+        finally:
+            if robot.live:
+                robot.live.message("Finished; the arm is parked or stopped", "done")
+                robot.live.close()
 
 
 async def run_robot(args, config: Config) -> None:
-    await with_robot(config, lambda robot: run_steps(robot, args, config), args.confirm_moves, args.confirm_above)
+    await with_robot(config, lambda robot: run_steps(robot, args, config), args.confirm_moves, args.confirm_above,
+                     go_ready=args.execute)
 
 
 async def touch_off_step(robot: Robot, config: Config, execute: bool, session: Session | None = None) -> dict | None:
     ''' Touch-off on a survey's table (the latest survey unless `session` is given); saves the result. '''
-    session = session or Session.latest(config.resolve(config.data_dir))
+    if not config.machine.gripper:
+        log.info("Touch-off is off: no gripper is mounted ([machine] gripper = \"\" in config.toml).")
+        return None
+    session = session or Session.latest(config.resolve(config.data_dir), surveyed=True)
     objects, plane = session.load_scene()
     robot.set_scene(plane, session.load_clutter())
     board = session.read().get("board")
@@ -145,7 +162,7 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
         return
     reuse = (args.command == "plan" and not args.new_survey) or (args.command == "scan" and args.reuse_survey)
     if reuse:
-        session = Session.latest(config.resolve(config.data_dir))
+        session = Session.latest(config.resolve(config.data_dir), surveyed=True)
         objects, plane = session.load_scene()
         robot.set_scene(plane, session.load_clutter())
         log.info("Using survey from %s", session.root)
@@ -197,11 +214,26 @@ def ask_object(obj) -> str:
         print("  Please type Enter, n, a or q.")
 
 
+def latest_survey(robot: Robot, config: Config):
+    ''' The latest saved survey, for planning only: wherever the camera happens to be now
+    (a fresh look from a pose too close to the table finds nothing). '''
+    session = Session.latest(config.resolve(config.data_dir), surveyed=True)
+    objects, plane = session.load_scene()
+    robot.set_scene(plane, session.load_clutter())
+    log.info("Planning on the survey in %s (run calibration.py or scan.py to survey again)", session.root)
+    for obj in objects:
+        log.info("  %s", obj.describe())
+    return session, objects, plane
+
+
 async def scan_everything(robot: Robot, config: Config, execute: bool, max_views: int | None,
                           truth_file: str = "ground_truth.toml") -> None:
     ''' Survey, list what's on the table, scan each object (asking first), park the arm,
     then build every mesh and figure and compare with the calipers where possible. '''
-    session, objects, plane = await survey_step(robot, config, execute)
+    if execute:
+        session, objects, plane = await survey_step(robot, config, execute)
+    else:
+        session, objects, plane = latest_survey(robot, config)
     if not objects:
         log.info("No objects to scan on the table. (Things too low, or not standing in open table, are skipped; see the survey output above.)")
         return
@@ -386,16 +418,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=["survey", "plan", "scan", "calibrate", "calibrate-board", "touch-off", "reconstruct", "progression", "compare", "demo"],
                         help="one step on its own (leave out for the whole scan)")
-    parser.add_argument("--plan-only", action="store_true", help="the whole scan: survey from where the camera is and plan, without moving")
+    parser.add_argument("--plan-only", action="store_true", help="the whole scan, planned on the latest survey, without moving")
     parser.add_argument("--config", default="config.toml")
     parser.add_argument("--execute", action="store_true", help="allow the arm to move")
     parser.add_argument("--step", action="store_true", help="confirm before each object and each relocation")
     parser.add_argument("--confirm-moves", action="store_true", help="show and confirm every single arm move")
     parser.add_argument("--confirm-above", type=float, metavar="DEG",
                         help="show every move, but only ask when some joint turns at least DEG degrees")
-    parser.add_argument("--low-ring", action="store_true",
-                        help="add a ring of views at [views] low_ring_deg (15deg) for rounded objects; "
-                             "views that would bring the camera under min_camera_height (80mm) above the table are skipped")
+    parser.add_argument("--full-scan", action="store_true",
+                        help="50 frames per scan view, and every raw frame saved (a dataset to subsample later; "
+                             "about 2 minutes per view)")
     parser.add_argument("--max-views", type=int, help="scan: capture only N of each object's views, spread over all directions (16 measured every side of the test blocks)")
     parser.add_argument("--reuse-survey", action="store_true", help="scan: use the latest survey instead of surveying again")
     parser.add_argument("--objects", type=object_list, help="object ids from the survey, e.g. 0,2 (default: all)")
@@ -420,18 +452,22 @@ def main() -> None:
     for noisy in ("viam", "grpclib", "asyncio"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     config = load_config(args.config)
-    if args.low_ring:
-        config.views.elevations_deg = sorted({*config.views.elevations_deg, config.views.low_ring_deg})
-        log.info("Rings at %s deg; the camera stays at least %.0fmm above the table",
-                 ", ".join(f"{e:g}" for e in config.views.elevations_deg), config.views.min_camera_height)
+    if args.full_scan:
+        config.capture.frames_per_view = config.capture.full_scan_frames
+        config.capture.keep_frames = True
+        log.info("Full scan: %d frames per view, every raw frame saved (about %.0f minutes per view)",
+                 config.capture.frames_per_view, config.capture.frames_per_view * 2.6 / 60)
 
     if args.command is None:
         execute = not args.plan_only
+        # About 45 views per object; each is a move (about 6s) plus its frames (about 2.6s each).
+        minutes = 45 * (6 + 2.6 * config.capture.frames_per_view) / 60
         if execute and input("The arm will move to survey the table, then scan each object you choose "
-                             "(about 15 minutes each; Ctrl+C or the e-stop stops it). Start? [y/N] ").strip().lower() not in ("y", "yes"):
+                             f"(about {minutes:.0f} minutes each; Ctrl+C, the live viewer's Stop, or the e-stop stops it). "
+                             "Start? [y/N] ").strip().lower() not in ("y", "yes"):
             return
         asyncio.run(with_robot(config, lambda robot: scan_everything(robot, config, execute, args.max_views, args.truth_file),
-                               args.confirm_moves, args.confirm_above))
+                               args.confirm_moves, args.confirm_above, go_ready=execute))
     elif args.command == "demo":
         run_demo(config, args.progression)
     elif args.command == "progression":

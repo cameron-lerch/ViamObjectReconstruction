@@ -26,6 +26,7 @@ from viam.proto.common import (
     Vector3,
     WorldState,
 )
+from viam.proto.component.arm import JointPositions
 from viam.proto.service.motion import Constraints, LinearConstraint, MoveRequest
 from viam.robot.client import RobotClient
 from viam.services.motion import MotionClient
@@ -33,7 +34,7 @@ from viam.services.motion import MotionClient
 from .config import Config
 from .rgbd import Intrinsics, decode_depth, median_depth
 from .scene import DetectedObject, TablePlane
-from .transforms import matrix_to_pose, pose_to_matrix, rotation_angle_deg
+from .transforms import make_transform, matrix_to_pose, pose_to_matrix, rotation_angle_deg
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class Robot:
         names = config.machine
         self.arm = Arm.from_robot(machine, names.arm)
         self.camera = Camera.from_robot(machine, names.camera)
-        self.gripper = Gripper.from_robot(machine, names.gripper)
+        self.gripper = Gripper.from_robot(machine, names.gripper) if names.gripper else None
         self.motion = MotionClient.from_robot(machine, names.motion)
         self._intrinsics: Intrinsics | None = None
         self.table_plane: TablePlane | None = None
@@ -110,6 +111,9 @@ class Robot:
         # confirm_above_deg set, only ask when some joint turns at least that far.
         self.confirm_moves = False
         self.confirm_above_deg: float | None = None
+        # The live viewer (recon/live.py), if one is running: its Pause and Stop act before every move.
+        self.live = None
+        self.last_frames = None  # every raw frame of the last capture made with keep=True
 
     def set_measured_table(self, plane: TablePlane) -> None:
         ''' Use the table as perception measured it, in addition to the machine's configured
@@ -153,7 +157,7 @@ class Robot:
         ''' How much further the real fingertips reach than the gripper's collision model,
         from the touch-off file (0 when there is none or they don't). '''
         path = self.config.resolve(self.config.machine.touch_off_file) if self.config.machine.touch_off_file else None
-        if path is None or not path.exists():
+        if path is None or not path.exists() or not self.config.machine.gripper:
             return 0.0
         return max(0.0, float(json.loads(path.read_text()).get("extra_reach_mm", 0.0)))
 
@@ -175,9 +179,7 @@ class Robot:
         camera frame in the Viam app only affects its 3D scene), otherwise from the
         machine's frame configuration.
         '''
-        if self._camera_mount is None and self.config.machine.camera_mount_file:
-            path = self.config.resolve(self.config.machine.camera_mount_file)
-            self._camera_mount = np.array(json.loads(path.read_text())["mount"])
+        self._mount_from_file()
         if self._camera_mount is None:
             for part in await self.machine.get_frame_system_config():
                 frame = part.frame
@@ -218,6 +220,38 @@ class Robot:
             return self.config.machine.arm, T_world @ np.linalg.inv(await self.camera_mount())
         return frame, T_world
 
+    def _mount_from_file(self) -> np.ndarray | None:
+        if self._camera_mount is None and self.config.machine.camera_mount_file:
+            path = self.config.resolve(self.config.machine.camera_mount_file)
+            self._camera_mount = np.array(json.loads(path.read_text())["mount"])
+        return self._camera_mount
+
+    def camera_guard(self) -> list[Transform]:
+        ''' Collision boxes for the camera body and its bracket, attached to the arm's end
+        through our calibrated mount, so plans keep the real camera clear of everything
+        (see MachineConfig.camera_body_mm). '''
+        mount = self._mount_from_file()
+        if mount is None:
+            return []
+        names = self.config.machine
+        body = mount @ make_transform(np.eye(3), [0.0, 0.0, names.camera_body_offset_mm])
+        reach = mount[:3, 3]
+        along = reach / np.linalg.norm(reach)
+        side = np.cross(along, [0.0, 0.0, 1.0] if abs(along[2]) < 0.9 else [1.0, 0.0, 0.0])
+        side /= np.linalg.norm(side)
+        bracket = make_transform(np.column_stack([along, side, np.cross(along, side)]), reach / 2)
+        guards = []
+        for label, pose, dims in (("camera-body-guard", body, names.camera_body_mm),
+                                  ("camera-bracket-guard", bracket,
+                                   [np.linalg.norm(reach), names.camera_bracket_mm, names.camera_bracket_mm])):
+            guards.append(Transform(
+                reference_frame=label,
+                pose_in_observer_frame=PoseInFrame(reference_frame=names.arm, pose=matrix_to_pose(pose)),
+                physical_object=Geometry(center=matrix_to_pose(np.eye(4)),
+                                         box=RectangularPrism(dims_mm=Vector3(x=dims[0], y=dims[1], z=dims[2])),
+                                         label=label)))
+        return guards
+
     def world_state(self, obstacles: list[DetectedObject], margin: float,
                     carried: tuple[DetectedObject, np.ndarray] | None = None) -> WorldState | None:
         ''' Detected objects, the clutter around them and the measured table as obstacles,
@@ -226,7 +260,7 @@ class Robot:
         geometries += [box_geometry(obj, margin, f"clutter-{obj.id}") for obj in self.clutter]
         if self.table_plane is not None and self.use_table_slab:
             geometries += self.table_slab()
-        transforms = []
+        transforms = self.camera_guard()
         if carried is not None:
             obj, T_gripper_obj = carried
             transforms.append(Transform(
@@ -242,6 +276,8 @@ class Robot:
     async def plan(self, frame: str, T_world: np.ndarray, world_state: WorldState | None = None,
                    linear: bool = False) -> tuple[list | None, str]:
         ''' Plan without moving. Returns (trajectory, "") or (None, reason). '''
+        if world_state is None:  # still the table, the clutter and the camera guard
+            world_state = self.world_state([], 0.0)
         frame, T_world = await self._resolve(frame, T_world)
         request = MoveRequest(
             name=self.config.machine.motion,
@@ -288,16 +324,27 @@ class Robot:
 
     async def move(self, frame: str, T_world: np.ndarray, world_state: WorldState | None = None,
                    linear: bool = False) -> None:
+        if self.live:
+            await self.live.checkpoint()
+        if world_state is None:  # still the table, the clutter and the camera guard
+            world_state = self.world_state([], 0.0)
         if self.confirm_moves:
             await self._confirm_move(frame, T_world, world_state, linear)
         frame, T_world = await self._resolve(frame, T_world)
-        moved = await self.motion.move(
-            component_name=frame,
-            destination=PoseInFrame(reference_frame="world", pose=matrix_to_pose(T_world)),
-            world_state=world_state,
-            constraints=self._constraints(linear),
-            timeout=self.config.capture.move_timeout_s,
-        )
+        try:
+            moved = await self.motion.move(
+                component_name=frame,
+                destination=PoseInFrame(reference_frame="world", pose=matrix_to_pose(T_world)),
+                world_state=world_state,
+                constraints=self._constraints(linear),
+                timeout=self.config.capture.move_timeout_s,
+            )
+        except Exception:
+            if self.live and self.live.stopping:  # STOP halted this move
+                await self.live.checkpoint()
+            raise
+        if self.live and self.live.stopping:
+            await self.live.checkpoint()
         if not moved:
             raise RuntimeError(f"Motion service did not complete the move of {frame!r}")
         await self.wait_until_still()
@@ -338,6 +385,51 @@ class Robot:
         # enough for the touch-off's 1mm steps, loose enough for the planner to solve).
         return Constraints(linear_constraint=[LinearConstraint(line_tolerance_mm=2.0, orientation_tolerance_degs=2.0)])
 
+    async def go_ready(self) -> None:
+        ''' Step from wherever the arm is to the ready pose (camera over the mat, looking down),
+        one joint group at a time, each step shown and confirmed by the operator.
+
+        Free-moving the arm by hand can leave it anywhere (on 2026-10-29: joint 4 at 290deg),
+        and one planned move from such a pose to a camera-down pose turned every joint at
+        once, joint 4 by 290deg, fast enough to trip the arm's own speed limit. Steps here
+        turn one group at a time, in an order that keeps the arm's shape: the forearm roll
+        (4), the wrist (5, 6), the shoulder and elbow (2, 3), then the base (1). They go
+        straight to joint angles, without the planner's collision checks, which is why
+        each one waits for the operator watching the arm.
+        '''
+        names = self.config.machine
+        ready = np.array(names.ready_joints_deg, float)
+        current = np.array((await self.arm.get_joint_positions()).values, float)
+        T_end = pose_to_matrix(await self.arm.get_end_position())
+        log.info("Arm joints now (deg): %s", np.round(current).astype(int).tolist())
+        log.info("  arm's end at (%.0f, %.0f, %.0f)mm, pointing (%+.2f, %+.2f, %+.2f)", *T_end[:3, 3], *T_end[:3, 2])
+        log.info("Ready pose (deg):     %s", np.round(ready).astype(int).tolist())
+        if np.all(np.abs(current - ready) <= names.ready_tolerance_deg):
+            log.info("  already at the ready pose")
+            return
+        steps = [("forearm roll (joint 4)", [3]), ("wrist (joints 5, 6)", [4, 5]),
+                 ("shoulder and elbow (joints 2, 3)", [1, 2]), ("base (joint 1)", [0])]
+        for name, joints in steps:
+            if self.live:
+                await self.live.checkpoint()
+            target = current.copy()
+            target[joints] = ready[joints]
+            change = target - current
+            if np.all(np.abs(change[joints]) <= names.ready_tolerance_deg):
+                continue
+            moves = ", ".join(f"joint {j + 1} {current[j]:.0f} -> {ready[j]:.0f} ({change[j]:+.0f})" for j in joints
+                              if abs(change[j]) > names.ready_tolerance_deg)
+            print(f"\nTo the ready pose, {name}: {moves}deg")
+            print("  (straight to joint angles: no collision checks, so watch the arm)")
+            answer = await asyncio.to_thread(input, "  Press Enter to move, or type n to stop: ")
+            if answer.strip().lower().startswith("n"):
+                raise MoveDeclined(f"Ready pose: the {name} step was declined")
+            await self.arm.move_to_joint_positions(JointPositions(values=target.tolist()))
+            await self.wait_until_still()
+            current = np.array((await self.arm.get_joint_positions()).values, float)
+        await self.checked_camera_pose()
+        log.info("At the ready pose: %s", np.round(current).astype(int).tolist())
+
     async def wait_until_still(self, timeout: float = 10.0) -> None:
         deadline = time.monotonic() + timeout
         while await self.arm.is_moving():
@@ -345,7 +437,8 @@ class Robot:
                 raise TimeoutError("Arm still reports motion")
             await asyncio.sleep(0.05)
 
-    async def capture(self, frames: int | None = None, depth: bool = True) -> tuple[bytes, str, np.ndarray, np.ndarray, dict]:
+    async def capture(self, frames: int | None = None, depth: bool = True,
+                      keep: bool = False) -> tuple[bytes, str, np.ndarray, np.ndarray, dict]:
         ''' Capture a still view: wait for the arm to settle, then take the median of several fresh frames.
 
         Frames are accepted only if the camera stamped them at least `settle_s`
@@ -353,7 +446,8 @@ class Robot:
         during motion are never used. The camera pose is read after settling.
         With `depth=False` only color is fetched (about 0.15s instead of 2-3s over
         a cloud connection, where a depth image is 1.8MB) and the depth is empty.
-        Returns (color bytes, color extension, depth mm, T_world_cam, metadata).
+        Returns (color bytes, color extension, depth mm, T_world_cam, metadata). With
+        `keep`, every frame's color bytes and depth are also left in `self.last_frames`.
         '''
         capture = self.config.capture
         names = self.config.machine
@@ -366,6 +460,7 @@ class Robot:
 
         sources = [names.color_source, names.depth_source] if depth else [names.color_source]
         depths, stamps, color, color_ext = [], [], None, "jpg"
+        colors = []
         deadline = time.monotonic() + capture.frame_timeout_s * frames
         while len(stamps) < frames:
             if time.monotonic() > deadline:
@@ -378,15 +473,19 @@ class Robot:
             for image in images:
                 if image.mime_type == DEPTH_MIME:
                     depths.append(decode_depth(image.data))
-                elif color is None:
-                    color = image.data
-                    color_ext = "png" if "png" in image.mime_type else "jpg"
+                else:
+                    if keep:
+                        colors.append(image.data)
+                    if color is None:
+                        color = image.data
+                        color_ext = "png" if "png" in image.mime_type else "jpg"
             stamps.append(stamp)
 
         T_world_cam = await self.checked_camera_pose()
         joints = list((await self.arm.get_joint_positions()).values)
         meta = {"captured_at": stamps, "joints_deg": joints, "frames": frames, "depth": depth,
                 "camera_mount": (await self.camera_mount()).tolist()}
+        self.last_frames = (colors, depths, color_ext) if keep else None
         if depths:
             fused = median_depth(depths)
         else:

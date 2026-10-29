@@ -8,7 +8,7 @@
    mount for every move and capture.
 2. Table: survey the table from above with the newly calibrated camera (the
    table's height, the objects on it, and the board).
-3. Gripper (asks first): the touch-off. You stand at the arm with a sheet of
+3. Gripper (asks first; off while no gripper is mounted): the touch-off. You stand at the arm with a sheet of
    paper; the closed gripper steps down onto the table at 3 open spots near the
    objects until the paper drags, which measures how far the fingertips reach.
    Only needed for a new arm or gripper, or if something was changed or bumped.
@@ -47,12 +47,15 @@ async def calibrate_scene(robot, config, execute: bool, touch_off: bool | None) 
     session, objects, _ = await survey_step(robot, config, execute)
 
     log.info("\n== 3/3 Gripper: touch-off ==")
-    if touch_off is None:
+    if not config.machine.gripper:
+        log.info("Skipped: no gripper is mounted (the touch-off measures a gripper's fingertips).")
+        touch_off = False
+    elif touch_off is None:
         touch_off = execute and await asyncio.to_thread(
             ask, "Run the touch-off now? You need to be at the arm with a sheet of paper.")
-    if touch_off or not execute:
+    if config.machine.gripper and (touch_off or not execute):
         await touch_off_step(robot, config, execute, session)
-    else:
+    elif config.machine.gripper:
         log.info("Skipped; the last touch-off's result stays in use (calibration/*touch_off.json).")
 
     log.info("\nCalibration %s. %d object(s) on the table. Next: python scan.py",
@@ -75,7 +78,7 @@ def main() -> None:
                            "(about 5 minutes; Ctrl+C or the e-stop stops it). Start?"):
         return
     touch_off = {"ask": None, "yes": True, "no": False}[args.touch_off]
-    asyncio.run(with_robot(config, lambda robot: calibrate_scene(robot, config, execute, touch_off)))
+    asyncio.run(with_robot(config, lambda robot: calibrate_scene(robot, config, execute, touch_off), go_ready=execute))
 
 
 if __name__ == "__main__":

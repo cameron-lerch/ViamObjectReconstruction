@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Scan</title>
+<style>
+  :root {
+    --bg: #F4F6F8; --panel: #FFFFFF; --text: #1F2933; --muted: #52606D; --line: #D9E2EC;
+    --accent: #2F6FB0; --warn: #B7791F; --stop: #B83232; --ok: #2E7D4F; --view: #E9EEF3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14181D; --panel: #1C2229; --text: #E4E7EB; --muted: #9AA5B1; --line: #323F4B;
+            --accent: #63A4E8; --warn: #E3A23B; --stop: #E66A6A; --ok: #5FBF85; --view: #11151A; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  h1 { font-size: 18px; margin: 0; }
+  #state { font-weight: 700; padding: 2px 10px; border-radius: 999px; background: var(--view); }
+  #state.running, #state.scanning { color: var(--ok); }
+  #state.paused { color: var(--warn); }
+  #state.stopped, #state.done { color: var(--muted); }
+  #summary { color: var(--muted); flex: 1 1 300px; }
+  .buttons { display: flex; gap: 8px; }
+  button { font: inherit; font-weight: 600; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.stop { color: var(--stop); }
+  button.halt { background: var(--stop); border-color: var(--stop); color: #FFFFFF; }
+  main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+  section h2 { font-size: 14px; margin: 0; padding: 8px 12px; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--line); }
+  section h2 span { color: var(--muted); font-weight: 400; margin-left: auto; font-size: 12px; }
+  .view { position: relative; height: 380px; background: var(--view); }
+  .view canvas { display: block; width: 100%; height: 100%; }
+  .view img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); padding: 16px; text-align: center; }
+  .toggle { font-size: 12px; font-weight: 400; display: inline-flex; gap: 4px; }
+  .toggle button { padding: 2px 8px; font-size: 12px; border-radius: 6px; }
+  .toggle button.on { border-color: var(--accent); color: var(--accent); }
+  #log { grid-column: 1 / -1; }
+  #log pre { margin: 0; padding: 10px 12px; height: 180px; overflow: auto; font: 12px/1.45 ui-monospace, "Liberation Mono", monospace; color: var(--muted); }
+  .hint { color: var(--muted); font-size: 12px; padding: 6px 12px; border-top: 1px solid var(--line); }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <h1>Live scan</h1>
+  <div id="state">connecting</div>
+  <div id="summary"></div>
+  <div class="buttons">
+    <button id="pause">Pause</button>
+    <button id="stop" class="stop">End Scan</button>
+    <button id="halt" class="halt" title="Halts the arm immediately (arm.stop), no questions asked">STOP</button>
+  </div>
+</header>
+<main>
+  <section>
+    <h2>Mesh so far <span id="meshInfo"></span>
+      <span class="toggle"><button id="meshGray" class="on">gray</button><button id="meshColor">color</button></span></h2>
+    <div class="view" id="meshView"><div class="empty" id="meshEmpty">The mesh appears after the first scan view.</div></div>
+    <div class="hint">Drag to rotate, scroll to zoom, right-drag to pan. Surface seen by 2 or more views, as in the final mesh.</div>
+  </section>
+  <section>
+    <h2>Point cloud <span id="pointsInfo"></span>
+      <span class="toggle"><button id="pointsLatest" class="on">latest view</button><button id="pointsAll">all views</button></span></h2>
+    <div class="view" id="pointsView"><div class="empty" id="pointsEmpty">Points appear after the first scan view.</div></div>
+    <div class="hint">The latest view's points near the object, in their camera colors (or every view so far, thinned to 2mm).</div>
+  </section>
+  <section>
+    <h2>Scan camera <span id="cameraInfo"></span>
+      <span class="toggle"><button id="showColor" class="on">color</button><button id="showDepth">depth</button></span></h2>
+    <div class="view"><img id="camera" alt="The latest capture from the wrist camera" hidden><div class="empty" id="cameraEmpty">No capture yet.</div></div>
+    <div class="hint">The latest capture (survey, board or scan view). Depth: near is red, far is blue, no reading is black.</div>
+  </section>
+  <section>
+    <h2>Monitoring camera <span id="monitorInfo"></span></h2>
+    <div class="view"><img id="monitor" alt="The monitoring camera's latest frame" hidden><div class="empty" id="monitorEmpty">No monitoring camera: set [live] monitor_camera in config.toml to a camera's name.</div></div>
+    <div class="hint">About one frame per second.</div>
+  </section>
+  <section id="log">
+    <h2>Log</h2>
+    <pre id="logText"></pre>
+  </section>
+</main>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
+
+const $ = (id) => document.getElementById(id);
+const loader = new PLYLoader();
+
+function makeViewer(container) {
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue("--view").trim());
+  const camera = new THREE.PerspectiveCamera(40, 1, 1, 10000);
+  camera.up.set(0, 0, 1);  // the robot's world: z is up, millimeters
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+  camera.add(sun);  // a light that follows the camera, so every side is lit as you turn it
+  sun.position.set(0.5, 1, 0.5);
+  scene.add(camera);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  const viewer = { renderer, scene, camera, controls, object: null, framedFor: null };
+  const resize = () => {
+    const { clientWidth: w, clientHeight: h } = container;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / Math.max(h, 1);
+    camera.updateProjectionMatrix();
+  };
+  new ResizeObserver(resize).observe(container);
+  resize();
+  const loop = () => { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); };
+  loop();
+  return viewer;
+}
+
+function show(viewer, object, key) {
+  if (viewer.object) {
+    viewer.scene.remove(viewer.object);
+    viewer.object.geometry.dispose();
+  }
+  viewer.object = object;
+  viewer.scene.add(object);
+  // Frame the object once per scanned object; after that, keep wherever the user turned it.
+  if (viewer.framedFor !== key) {
+    object.geometry.computeBoundingSphere();
+    const { center, radius } = object.geometry.boundingSphere;
+    viewer.controls.target.copy(center);
+    viewer.camera.position.copy(center).add(new THREE.Vector3(-1.4, -1.6, 1.1).multiplyScalar(radius * 1.6));
+    viewer.camera.near = radius / 50;
+    viewer.camera.far = radius * 50;
+    viewer.camera.updateProjectionMatrix();
+    viewer.framedFor = key;
+  }
+}
+
+const meshViewer = makeViewer($("meshView"));
+const pointsViewer = makeViewer($("pointsView"));
+const meshMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide });
+let pointsMode = "points";  // or "all_points"
+let cameraMode = "color";   // or "depth"
+let last = { versions: {} };
+
+function load(url) {
+  return new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
+}
+
+async function refreshMesh(status) {
+  const geometry = await load(`/files/mesh.ply?v=${status.versions.mesh}`);
+  geometry.computeVertexNormals();
+  meshMaterial.vertexColors = $("meshColor").classList.contains("on") && geometry.hasAttribute("color");
+  meshMaterial.color.set(meshMaterial.vertexColors ? 0xffffff : 0xb8c2cc);
+  meshMaterial.needsUpdate = true;
+  show(meshViewer, new THREE.Mesh(geometry, meshMaterial), status.object && status.object.id);
+  $("meshEmpty").hidden = true;
+  $("meshInfo").textContent = `${status.fused} view${status.fused === 1 ? "" : "s"} fused, ${status.triangles.toLocaleString()} triangles`;
+}
+
+async function refreshPoints(status) {
+  const geometry = await load(`/files/${pointsMode}.ply?v=${status.versions.points}`);
+  const material = new THREE.PointsMaterial({ size: 2.0, vertexColors: geometry.hasAttribute("color") });
+  show(pointsViewer, new THREE.Points(geometry, material), status.object && status.object.id);
+  $("pointsEmpty").hidden = true;
+  $("pointsInfo").textContent = `${geometry.attributes.position.count.toLocaleString()} points`;
+}
+
+function refreshImage(img, empty, name, version) {
+  img.src = `/files/${name}?v=${version}`;
+  img.onload = () => { empty.hidden = true; img.hidden = false; };
+}
+
+function render(status) {
+  const state = status.paused && status.state !== "paused" ? "pausing" : status.stopping && status.state !== "stopped" ? "stopping" : status.state;
+  $("state").textContent = state;
+  $("state").className = status.state;
+  const parts = [];
+  if (status.session) parts.push(`session ${status.session}`);
+  if (status.object) parts.push(status.object.description);
+  if (status.views) parts.push(`view ${status.view} of ${status.views}`);
+  if (status.message) parts.push(status.message);
+  $("summary").textContent = parts.join(" · ");
+  const ended = ["stopped", "done"].includes(status.state) || status.read_only;
+  $("pause").textContent = status.paused ? "Resume" : "Pause";
+  $("pause").disabled = ended || status.stopping;
+  $("stop").disabled = ended || status.stopping;
+  $("halt").disabled = ended;
+  const log = $("logText");
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  log.textContent = status.log.join("\n");
+  if (atBottom) log.scrollTop = log.scrollHeight;
+  if (!status.monitor) $("monitorEmpty").hidden = false;
+}
+
+async function poll() {
+  try {
+    const status = await (await fetch("/api/status")).json();
+    const v = status.versions, old = last.versions;
+    render(status);
+    if (v.mesh && v.mesh !== old.mesh) await refreshMesh(status);
+    if (v.points && v.points !== old.points) await refreshPoints(status);
+    const cameraName = cameraMode === "color" ? "color" : "depth";
+    if (v[cameraName] && v[cameraName] !== old[cameraName]) refreshImage($("camera"), $("cameraEmpty"), `${cameraName}.jpg`, v[cameraName]);
+    if (v.monitor && v.monitor !== old.monitor) refreshImage($("monitor"), $("monitorEmpty"), "monitor.jpg", v.monitor);
+    last = status;
+  } catch (error) {
+    $("state").textContent = "disconnected";
+    $("state").className = "stopped";
+    $("summary").textContent = "The scan isn't running (its live viewer closes when the scan ends).";
+  }
+  setTimeout(poll, 1000);
+}
+
+async function post(action) {
+  const status = await (await fetch(`/api/${action}`, { method: "POST" })).json();
+  render(status);
+}
+
+$("pause").onclick = () => post(last.paused ? "resume" : "pause");
+$("stop").onclick = () => {
+  if (confirm("End the scan before the arm's next move? Views captured so far are kept.")) post("stop");
+};
+// STOP halts the arm at once: no confirmation, since every second counts.
+$("halt").onclick = () => post("stop-now");
+
+function pick(on, off, apply) {
+  $(on).classList.add("on");
+  $(off).classList.remove("on");
+  apply();
+}
+$("meshColor").onclick = () => pick("meshColor", "meshGray", () => last.versions.mesh && refreshMesh(last));
+$("meshGray").onclick = () => pick("meshGray", "meshColor", () => last.versions.mesh && refreshMesh(last));
+$("pointsLatest").onclick = () => pick("pointsLatest", "pointsAll", () => { pointsMode = "points"; last.versions.points && refreshPoints(last); });
+$("pointsAll").onclick = () => pick("pointsAll", "pointsLatest", () => { pointsMode = "all_points"; last.versions.points && refreshPoints(last); });
+$("showColor").onclick = () => pick("showColor", "showDepth", () => { cameraMode = "color"; last.versions.color && refreshImage($("camera"), $("cameraEmpty"), "color.jpg", last.versions.color); });
+$("showDepth").onclick = () => pick("showDepth", "showColor", () => { cameraMode = "depth"; last.versions.depth && refreshImage($("camera"), $("cameraEmpty"), "depth.jpg", last.versions.depth); });
+
+poll();
+</script>
+</body>
+</html>

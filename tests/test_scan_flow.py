@@ -35,6 +35,8 @@ def run(monkeypatch, answers, objects=3, execute=True):
         calls.append("home")
 
     monkeypatch.setattr(scan, "survey_step", survey_step)
+    monkeypatch.setattr(scan, "latest_survey", lambda robot, config: (calls.append("latest survey") or FakeSession(),
+                                                                       [block(k) for k in range(objects)], None))
     monkeypatch.setattr(scan.pipeline, "scan_object", scan_object)
     monkeypatch.setattr(scan.pipeline, "plan_object", plan_object)
     monkeypatch.setattr(scan.pipeline, "save_plan", lambda *a: None)
@@ -63,7 +65,8 @@ def test_quit_still_parks_and_finishes_what_was_scanned(monkeypatch):
 
 
 def test_plan_only_plans_every_object_and_moves_nothing(monkeypatch):
-    assert run(monkeypatch, [], execute=False) == ["survey", "plan 0", "plan 1", "plan 2"]
+    # Planning only uses the latest saved survey: no fresh look from wherever the camera is.
+    assert run(monkeypatch, [], execute=False) == ["latest survey", "plan 0", "plan 1", "plan 2"]
 
 
 def test_describe_for_person():

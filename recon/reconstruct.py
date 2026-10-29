@@ -195,32 +195,47 @@ def fusion_device(name: str) -> o3d.core.Device:
     return o3d.core.Device(name)
 
 
+def new_grid(config: Config) -> o3d.t.geometry.VoxelBlockGrid:
+    ''' An empty TSDF voxel grid (millimeter units). '''
+    settings = config.reconstruct
+    o3c = o3d.core
+    # Voxels are stored in blocks of 16^3, with room reserved for 1000 blocks (about 80MB);
+    # the grid grows by itself when it needs more. The 200mm pumpkin used 352 at 1.5mm
+    # voxels. (50000 blocks reserved 4.1GB of the 8GB GPU, so a second grid, such as the
+    # live viewer's, ran out of memory.)
+    return o3d.t.geometry.VoxelBlockGrid(
+        ("tsdf", "weight", "color"), (o3c.float32, o3c.float32, o3c.float32), (1, 1, 3),
+        settings.voxel, 16, 1000, fusion_device(settings.device))
+
+
+def integrate(grid: o3d.t.geometry.VoxelBlockGrid, view: View, pose: np.ndarray, obj: DetectedObject,
+              plane: TablePlane, config: Config) -> None:
+    ''' Add one view's object pixels to the grid. '''
+    settings = config.reconstruct
+    o3c = o3d.core
+    device = grid.hashmap().device
+    trunc_voxels = settings.sdf_trunc / settings.voxel
+    points, _, pixels = back_project(view, 1, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
+    keep = object_mask(points, obj, plane, settings)
+    depth = np.zeros_like(view.depth)
+    rows, cols = pixels[keep].T
+    depth[rows, cols] = view.depth[rows, cols]
+    depth_image = o3d.t.geometry.Image(o3c.Tensor(depth)).to(device)
+    color_image = o3d.t.geometry.Image(o3c.Tensor(np.ascontiguousarray(view.color))).to(device)
+    intrinsic = o3c.Tensor(view.intrinsics.matrix, o3c.float64)
+    extrinsic = o3c.Tensor(np.linalg.inv(pose), o3c.float64)
+    blocks = grid.compute_unique_block_coordinates(
+        depth_image, intrinsic, extrinsic, 1.0, config.camera.max_depth, trunc_voxels)
+    grid.integrate(blocks, depth_image, color_image, intrinsic, intrinsic, extrinsic,
+                   1.0, config.camera.max_depth, trunc_voxels)
+
+
 def fuse(views: list[View], poses: list[np.ndarray], obj: DetectedObject, planes: list[TablePlane],
          config: Config) -> o3d.t.geometry.VoxelBlockGrid:
     ''' Integrate each view's object pixels into a TSDF voxel grid (millimeter units). '''
-    settings = config.reconstruct
-    device = fusion_device(settings.device)
-    o3c = o3d.core
-    # Voxels are stored in blocks of 16^3, with room for 50000 blocks: a 60mm object at
-    # 1.5mm voxels needs well under 100 around its surface, a 250mm pumpkin about 1000.
-    grid = o3d.t.geometry.VoxelBlockGrid(
-        ("tsdf", "weight", "color"), (o3c.float32, o3c.float32, o3c.float32), (1, 1, 3),
-        settings.voxel, 16, 50000, device)
-    trunc_voxels = settings.sdf_trunc / settings.voxel
+    grid = new_grid(config)
     for view, pose, plane in zip(views, poses, planes):
-        points, _, pixels = back_project(view, 1, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
-        keep = object_mask(points, obj, plane, settings)
-        depth = np.zeros_like(view.depth)
-        rows, cols = pixels[keep].T
-        depth[rows, cols] = view.depth[rows, cols]
-        depth_image = o3d.t.geometry.Image(o3c.Tensor(depth)).to(device)
-        color_image = o3d.t.geometry.Image(o3c.Tensor(np.ascontiguousarray(view.color))).to(device)
-        intrinsic = o3c.Tensor(view.intrinsics.matrix, o3c.float64)
-        extrinsic = o3c.Tensor(np.linalg.inv(pose), o3c.float64)
-        blocks = grid.compute_unique_block_coordinates(
-            depth_image, intrinsic, extrinsic, 1.0, config.camera.max_depth, trunc_voxels)
-        grid.integrate(blocks, depth_image, color_image, intrinsic, intrinsic, extrinsic,
-                       1.0, config.camera.max_depth, trunc_voxels)
+        integrate(grid, view, pose, obj, plane, config)
     return grid
 
 

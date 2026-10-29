@@ -3,6 +3,7 @@
 import asyncio
 
 import numpy as np
+import pytest
 from viam.proto.common import Geometry, Pose, RectangularPrism, Vector3
 
 from recon.config import Config
@@ -89,6 +90,7 @@ def test_step_size():
 def test_world_state_includes_clutter():
     robot = Robot.__new__(Robot)
     robot.config, robot.table_plane, robot.use_table_slab = Config(), None, True
+    robot._camera_mount = None  # no mount file: no camera guard boxes
     robot.clutter = [block(300, -450)]
     labels = [g.label for g in robot.world_state([], 10.0).obstacles[0].geometries]
     assert labels == ["clutter-0"]
@@ -104,3 +106,20 @@ def test_spots_stay_near_the_scan_targets():
     for spot in spots:
         nearest = min(np.linalg.norm(spot[:2] - o.center[:2]) - o.footprint_radius for o in targets)
         assert CLEARANCE <= nearest <= CLEARANCE + VICINITY
+
+
+def test_camera_guard_sits_on_the_calibrated_camera_and_its_bracket():
+    from recon.transforms import pose_to_matrix
+    robot = Robot.__new__(Robot)
+    robot.config, robot.table_plane, robot.use_table_slab, robot.clutter = Config(), None, True, []
+    mount = np.eye(4)
+    mount[:3, 3] = [68.0, -35.0, 24.0]
+    robot._camera_mount = mount
+    body, bracket = robot.camera_guard()
+    assert body.pose_in_observer_frame.reference_frame == "arm"
+    T_body = pose_to_matrix(body.pose_in_observer_frame.pose)
+    assert np.allclose(T_body[:3, 3], [68.0, -35.0, 24.0 - 12.5], atol=1e-6)  # behind the lens
+    T_bracket = pose_to_matrix(bracket.pose_in_observer_frame.pose)
+    assert np.allclose(T_bracket[:3, 3], mount[:3, 3] / 2, atol=1e-6)
+    assert bracket.physical_object.box.dims_mm.x == pytest.approx(np.linalg.norm(mount[:3, 3]))
+    assert [t.reference_frame for t in robot.world_state([], 0.0).transforms] == ["camera-body-guard", "camera-bracket-guard"]

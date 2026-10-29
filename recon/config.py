@@ -12,6 +12,7 @@ class MachineConfig:
     credentials: str = "apikey.json"
     arm: str = "arm"
     camera: str = "cam"
+    # "" when no gripper is mounted (then touch-off and relocation are off).
     gripper: str = "gripper"
     # Names of the camera's color and depth images (get_images sources).
     color_source: str = "color"
@@ -23,6 +24,22 @@ class MachineConfig:
     # Touch-off result (`scan.py touch-off`): how far the real fingertips reach past
     # the gripper's collision model, added to the table safety margin.
     touch_off_file: str = ""
+    # Our own collision boxes for the camera, attached to the arm's end through our
+    # calibrated mount in every plan: the camera frame in the Viam app (and its box)
+    # sat 44-75mm from the real camera on 2026-10-29, and with the gripper off nothing
+    # else covers the wrist. The body box is a RealSense (about 90 x 25 x 25mm) plus
+    # 20mm all round for not knowing exactly where the lens sits in it; its center is
+    # this far along the viewing direction from the lens (behind it). The bracket box
+    # (this wide and tall) runs from the arm's end flange to the camera.
+    # The ready pose (joint angles, degrees): camera about 320mm over the calibration mat,
+    # looking straight down (the head-on board view of 2026-10-28/29). Every run that moves
+    # the arm starts by stepping here from wherever the arm is, one joint group at a time,
+    # each step confirmed (see Robot.go_ready); a joint within ready_tolerance_deg counts as there.
+    ready_joints_deg: list[float] = field(default_factory=lambda: [-41.0, -37.0, -76.0, 0.0, -40.0, -39.0])
+    ready_tolerance_deg: float = 5.0
+    camera_body_mm: list[float] = field(default_factory=lambda: [130.0, 45.0, 45.0])
+    camera_body_offset_mm: float = -12.5
+    camera_bracket_mm: float = 40.0
 
 
 @dataclass
@@ -94,7 +111,9 @@ class ViewConfig:
     # Distance from the camera to the nearest point of the object's bounding
     # sphere. RealSense D4xx depth fails closer than about 260mm at 1280x720.
     standoff: float = 280.0
-    elevations_deg: list[float] = field(default_factory=lambda: [25.0, 50.0, 72.0])
+    # The 15deg ring sees below a rounded object's widest point (a sphere, a pumpkin);
+    # added 2026-10-29 after the printed sphere and bowl scans.
+    elevations_deg: list[float] = field(default_factory=lambda: [15.0, 25.0, 50.0, 72.0])
     azimuth_step_deg: float = 30.0
     include_top_view: bool = True
     # Rolls about the optical axis to try; the one needing the least joint motion wins.
@@ -117,9 +136,6 @@ class ViewConfig:
     # model. Judgment: today's lowest ring (25deg) keeps the camera above about 130mm
     # even for small objects, so this only stops future low rings near the table.
     min_camera_height: float = 80.0
-    # The extra ring `scan.py --low-ring` adds, for objects whose lower half curves in
-    # (a sphere, a pumpkin). min_camera_height still applies to every view in it.
-    low_ring_deg: float = 15.0
 
 
 @dataclass
@@ -133,6 +149,11 @@ class CaptureConfig:
     # Frames per survey view: finding objects needs less precision than scanning them.
     survey_frames: int = 1
     move_timeout_s: float = 60.0
+    # `scan.py --full-scan`: this many frames per scan view, and every raw frame saved
+    # (views/view_NNN/frames/), for a dataset to subsample later. About 2.6s per frame
+    # over the cloud connection, so 50 frames take about 2 minutes per view.
+    full_scan_frames: int = 50
+    keep_frames: bool = False
 
 
 @dataclass
@@ -247,10 +268,21 @@ class BoardConfig:
 
 
 @dataclass
+class LiveConfig:
+    # The live viewer (recon/live.py): a page on this computer that follows a scan.
+    enabled: bool = True
+    port: int = 8765
+    # A Viam camera component that watches the whole cell, shown on the page ("" for none).
+    monitor_camera: str = ""
+    monitor_interval_s: float = 1.0
+
+
+@dataclass
 class Config:
     machine: MachineConfig = field(default_factory=MachineConfig)
     workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
+    live: LiveConfig = field(default_factory=LiveConfig)
     views: ViewConfig = field(default_factory=ViewConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     relocate: RelocateConfig = field(default_factory=RelocateConfig)

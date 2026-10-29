@@ -18,7 +18,7 @@ from .planner import ScanPlan, plan_scan, spread_views
 from .progression import progression
 from .reconstruct import reconstruct, save_reconstruction
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
-from .rgbd import back_project, load_view, load_views, save_view
+from .rgbd import back_project, load_view, load_views, save_frames, save_view
 from .robot import Robot
 from .scene import DetectedObject, TablePlane, clutter_around, detect_objects, fit_table_plane, merge_views, views_agree
 from .session import Session
@@ -30,9 +30,16 @@ CALIBRATION_FILE = "mount_calibration.json"
 MAX_BOARD_TILT_DEG = 3.0
 
 
-async def capture_view(robot: Robot, folder, extra: dict | None = None, frames: int | None = None, depth: bool = True):
-    color, color_ext, depth, T_world_cam, meta = await robot.capture(frames, depth)
+async def capture_view(robot: Robot, folder, extra: dict | None = None, frames: int | None = None, depth: bool = True,
+                       keep_frames: bool = False):
+    ''' Capture and save a view; with `keep_frames`, every raw frame too, in folder/frames/
+    (color_NNN.jpg and depth_NNN.png, 16-bit millimeters), beside the median depth.png. '''
+    color, color_ext, depth, T_world_cam, meta = await robot.capture(frames, depth, keep=keep_frames)
     save_view(folder, color, depth, T_world_cam, await robot.intrinsics(), {**meta, **(extra or {})}, color_ext)
+    if keep_frames and robot.last_frames:
+        save_frames(Path(folder) / "frames", *robot.last_frames)
+    if robot.live:
+        robot.live.captured(folder)
     return folder
 
 
@@ -335,6 +342,8 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
     views = spread_views(plan.views, max_views)
     if max_views is not None:
         log.info("  capturing %d of %d planned views, spread over all directions", len(views), len(plan.views))
+    if robot.live:
+        robot.live.start_object(session.root.name, target, plane, len(views))
     for index, view in enumerate(views):
         try:
             await robot.move(config.machine.camera, view.T_world_cam, world_state)
@@ -343,8 +352,13 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
             continue
         await capture_view(robot, session.views_dir(obj.id) / f"view_{index:03d}", {
             "azimuth_deg": view.candidate.azimuth_deg, "elevation_deg": view.candidate.elevation_deg,
-            "roll_deg": view.roll_deg, "commanded_T_world_cam": view.T_world_cam.tolist()})
+            "roll_deg": view.roll_deg, "commanded_T_world_cam": view.T_world_cam.tolist()},
+            keep_frames=config.capture.keep_frames)
         log.info("  captured view %d/%d (%s)", index + 1, len(views), view.candidate.describe())
+        if robot.live:
+            robot.live.view_captured(session.views_dir(obj.id) / f"view_{index:03d}", index)
+    if robot.live:
+        robot.live.end_object()
 
     if job is not None and config.relocate.return_after_scan:
         back = await plan_pick_and_place(robot, target, obj, others, config)

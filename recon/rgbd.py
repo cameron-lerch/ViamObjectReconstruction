@@ -145,9 +145,45 @@ def save_view(folder: Path, color: bytes | np.ndarray, depth: np.ndarray, T_worl
     else:
         o3d.io.write_image(str(folder / "color.jpg"), o3d.geometry.Image(np.ascontiguousarray(color)), quality=95)  # color is used for colors and the board, not geometry
     o3d.io.write_image(str(folder / "depth.png"), o3d.geometry.Image(np.ascontiguousarray(depth.astype(np.uint16))))
+    o3d.io.write_image(str(folder / "depth_preview.jpg"), o3d.geometry.Image(depth_preview(depth)), quality=85)
     record = {"T_world_cam": T_world_cam.tolist(), "intrinsics": asdict(intrinsics), **(meta or {})}
     (folder / "view.json").write_text(json.dumps(record, indent=2))
     return folder
+
+
+def depth_preview(depth: np.ndarray) -> np.ndarray:
+    ''' A depth image for looking at: near is red, far is blue (the "turbo" color map),
+    no reading is black.
+
+    depth.png holds millimeters as 16-bit numbers (the usual way to store depth, as
+    the RealSense tools and RGB-D datasets do), so a viewer shows 300-600mm as 0.5-1%
+    of full brightness: almost black. Colors follow each depth's rank among this
+    image's readings (histogram equalization, as the RealSense Viewer does), so a
+    patch of far floor doesn't squeeze everything else into one color. This copy is
+    only for viewing; nothing reads it.
+    '''
+    import cv2
+
+    valid = depth > 0
+    if not valid.any():
+        return np.zeros((*depth.shape, 3), np.uint8)
+    ordered = np.sort(depth[valid])
+    rank = np.searchsorted(ordered, depth, side="right") / len(ordered)
+    level = ((1.0 - rank) * 255).astype(np.uint8)
+    colored = np.ascontiguousarray(cv2.applyColorMap(level, cv2.COLORMAP_TURBO)[..., ::-1])
+    colored[~valid] = 0
+    return colored
+
+
+def save_frames(folder: Path, colors: list[bytes], depths: list[np.ndarray], color_ext: str = "jpg") -> None:
+    ''' Every raw frame of a view, as captured: color_NNN.<ext> (the camera's own
+    encoding) and depth_NNN.png (16-bit millimeters). '''
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    for index, color in enumerate(colors):
+        (folder / f"color_{index:03d}.{color_ext}").write_bytes(color)
+    for index, depth in enumerate(depths):
+        o3d.io.write_image(str(folder / f"depth_{index:03d}.png"), o3d.geometry.Image(np.ascontiguousarray(depth.astype(np.uint16))))
 
 
 def load_view(folder: Path) -> View:
