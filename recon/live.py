@@ -160,6 +160,12 @@ class Live:
     def captured(self, folder: Path) -> None:
         ''' Any capture (survey, board, scan): show its color and depth images. '''
         folder = Path(folder)
+        if (folder / "view.json").exists():
+            # Where the camera was, so the page can draw it in 3D and the world axes on its image.
+            record = json.loads((folder / "view.json").read_text())
+            lens = record["intrinsics"]
+            self.update(camera={"T_world_cam": record["T_world_cam"],
+                                **{key: lens[key] for key in ("fx", "fy", "cx", "cy", "width", "height")}})
         if (folder / "color.jpg").exists():
             shutil.copyfile(folder / "color.jpg", self.folder / "color.jpg")
             self._bump("color")
@@ -172,6 +178,7 @@ class Live:
         self._fusion.submit(self._reset)
         self._object, self._plane = obj, plane
         self.update(state="scanning", session=session_name, view=0, views=views,
+                    axes_origin=[float(obj.center[0]), float(obj.center[1]), float(obj.bottom_z)],
                     object={"id": obj.id, "description": obj.describe(), "center": obj.center.tolist(),
                             "size": obj.size.tolist()})
 

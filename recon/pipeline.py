@@ -19,7 +19,7 @@ from .progression import progression
 from .reconstruct import reconstruct, save_reconstruction
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
 from .rgbd import back_project, load_view, load_views, save_frames, save_view
-from .robot import Robot
+from .robot import MoveDeclined, Robot
 from .scene import DetectedObject, TablePlane, clutter_around, detect_objects, fit_table_plane, merge_views, views_agree
 from .session import Session
 from .transforms import look_at
@@ -247,7 +247,9 @@ async def view_board_head_on(robot: Robot, session: Session, config: Config, cen
     spec = BoardSpec()
     if not await move_camera_looking_down(robot, center[0], center[1], center[2] + config.board.view_height):
         return {}
-    folder = await capture_view(robot, session.root / "board" / "head_on")
+    # 3 frames, not the scan's frames_per_view (50 in a full scan): the board's pose and
+    # depth check need no more, and each frame costs about 2.6s over the cloud connection.
+    folder = await capture_view(robot, session.root / "board" / "head_on", frames=3)
     view = load_view(folder)
     found = detect(view, spec)
     if found is None:
@@ -271,7 +273,7 @@ async def locate_near(robot: Robot, x: float, y: float, plane: TablePlane, sessi
     height = plane.z_at(x, y) + config.views.standoff + 200  # 200mm higher: sees the whole station area
     if not await move_camera_looking_down(robot, x, y, height):
         raise RuntimeError("Cannot look at the scan station")
-    folder = await capture_view(robot, session.object_dir(object_id) / "located")
+    folder = await capture_view(robot, session.object_dir(object_id) / "located", frames=3)
     found = detect_objects(scene_points([folder], config), plane, config.workspace)
     if not found:
         raise RuntimeError(f"No object found near ({x:.0f}, {y:.0f})")
@@ -316,17 +318,79 @@ def save_plan(session: Session, obj: DetectedObject, plan: ScanPlan, job: PickAn
     })
 
 
+MAX_RESUME_SHIFT_MM = 3.0  # how far an object may have moved before a resumed scan refuses
+
+
+class ObjectMoved(RuntimeError):
+    ''' A resumed scan found the object (or the table) moved since its first views. '''
+
+
+def captured_views(session: Session, object_id: int) -> list[tuple[int, Path, dict]]:
+    ''' (index, folder, view.json) of each complete view of an object, in order. '''
+    views = []
+    for record in sorted(session.views_dir(object_id).glob("view_*/view.json")):
+        views.append((int(record.parent.name.split("_")[1]), record.parent, json.loads(record.read_text())))
+    return views
+
+
+def view_key(azimuth_deg: float, elevation_deg: float) -> tuple[int, int]:
+    ''' Which planned view this is: its angle around the object and its ring. '''
+    return round(float(azimuth_deg)) % 360, round(float(elevation_deg))
+
+
+def object_position(view, obj: DetectedObject, plane: TablePlane, config: Config) -> tuple[np.ndarray, float] | None:
+    ''' The object's center (x, y) and top height (95th percentile above the table) in one view. '''
+    points, _, _ = back_project(view, 2, config.camera.min_depth, config.camera.max_depth)
+    keep = obj.contains(points, 40.0) & (plane.height(points) > 5.0)
+    if keep.sum() < 50:
+        return None
+    return points[keep, :2].mean(axis=0), float(np.percentile(plane.height(points[keep]), 95))
+
+
+async def check_unmoved(robot: Robot, session: Session, obj: DetectedObject, others: list[DetectedObject],
+                        plane: TablePlane, config: Config) -> None:
+    ''' Before resuming an object: look again from its first captured view (the top view if
+    there is one) and compare where the object is. Raises ObjectMoved beyond 3mm. '''
+    views = captured_views(session, obj.id)
+    index, folder, record = next(((i, f, r) for i, f, r in views if r.get("elevation_deg") == 90.0), views[0])
+    old = load_view(folder)
+    pose = np.array(record.get("commanded_T_world_cam", record["T_world_cam"]))
+    await robot.move(config.machine.camera, pose, robot.world_state([obj, *others], config.views.object_margin))
+    new = load_view(await capture_view(robot, session.object_dir(obj.id) / "resume_check", frames=3))
+    before, after = object_position(old, obj, plane, config), object_position(new, obj, plane, config)
+    if before is None or after is None:
+        raise ObjectMoved(f"Object {obj.id} isn't where view {index} saw it; start a fresh scan")
+    shift = float(np.linalg.norm(after[0] - before[0]))
+    rise = after[1] - before[1]
+    log.info("  check against view %d: the object moved %.1fmm sideways, its top %+.1fmm", index, shift, rise)
+    if shift > MAX_RESUME_SHIFT_MM or abs(rise) > MAX_RESUME_SHIFT_MM:
+        raise ObjectMoved(f"Object {obj.id} moved {shift:.1f}mm sideways and {rise:+.1f}mm in height since its first "
+                          f"views (limit {MAX_RESUME_SHIFT_MM:.0f}mm); start a fresh scan")
+
+
 async def scan_object(robot: Robot, session: Session, obj: DetectedObject, others: list[DetectedObject],
                       plane: TablePlane, config: Config, execute: bool, step: bool,
-                      max_views: int | None = None) -> None:
-    plan, job, station_plan = await plan_object(robot, obj, others, config)
-    save_plan(session, obj, plan, job, station_plan)
+                      max_views: int | None = None, resume: bool = False) -> None:
+    ''' Plan and capture one object's views. With `resume`, continue an interrupted scan in
+    the same session: views already captured are skipped and the new ones numbered after them. '''
+    done = captured_views(session, obj.id) if resume else []
+    if done:
+        frames = {record.get("frames") for _, _, record in done}
+        if frames != {config.capture.frames_per_view}:
+            raise RuntimeError(f"Object {obj.id}'s views so far used {sorted(frames)} frames per view, this run "
+                               f"{config.capture.frames_per_view}; resume with the same options (--full-scan or not)")
+        target = scanned_object(session, obj.id)
+        plan = await plan_scan(robot, target, others, config)
+        job = station_plan = None
+    else:
+        plan, job, station_plan = await plan_object(robot, obj, others, config)
+        save_plan(session, obj, plan, job, station_plan)
     if not execute:
         return
     if step and not await confirm(f"Scan object {obj.id}?"):
         return
 
-    target = obj
+    target = scanned_object(session, obj.id) if done else obj
     if job is not None:
         if step and not await confirm(f"Move object {obj.id} to the scan station?"):
             job = None
@@ -335,18 +399,30 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
             target = await locate_near(robot, *job.destination.center[:2], plane, session, obj.id, config)
             plan = await plan_scan(robot, target, others, config)
             log.info("  at station: %s", plan.summary())
-    session.write_json(session.object_dir(obj.id) / "scanned_object.json", target.to_dict())
+    if not done:
+        session.write_json(session.object_dir(obj.id) / "scanned_object.json", target.to_dict())
 
     world_state = robot.world_state([target, *others], config.views.object_margin)
     # With max_views, a subset spread over all directions (not just the first, highest views).
     views = spread_views(plan.views, max_views)
     if max_views is not None:
         log.info("  capturing %d of %d planned views, spread over all directions", len(views), len(plan.views))
+    first = 0
+    if done:
+        taken = {view_key(r["azimuth_deg"], r["elevation_deg"]) for _, _, r in done if "azimuth_deg" in r}
+        views = [v for v in views if view_key(v.candidate.azimuth_deg, v.candidate.elevation_deg) not in taken]
+        first = max(index for index, _, _ in done) + 1
+        log.info("  resuming: %d view(s) already captured, %d still to capture", len(done), len(views))
     if robot.live:
-        robot.live.start_object(session.root.name, target, plane, len(views))
-    for index, view in enumerate(views):
+        robot.live.start_object(session.root.name, target, plane, len(done) + len(views))
+        for count, (_, folder, _) in enumerate(done):  # the preview starts where the scan left off
+            robot.live.view_captured(folder, count)
+    for number, view in enumerate(views):
+        index = first + number
         try:
             await robot.move(config.machine.camera, view.T_world_cam, world_state)
+        except MoveDeclined:  # End Scan, STOP, or a declined preview: end here, not "skip this view"
+            raise
         except Exception as error:  # the planner can still fail on a path it approved from elsewhere
             log.warning("  view %d (%s) skipped: %s", index, view.candidate.describe(), error)
             continue
@@ -354,9 +430,9 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
             "azimuth_deg": view.candidate.azimuth_deg, "elevation_deg": view.candidate.elevation_deg,
             "roll_deg": view.roll_deg, "commanded_T_world_cam": view.T_world_cam.tolist()},
             keep_frames=config.capture.keep_frames)
-        log.info("  captured view %d/%d (%s)", index + 1, len(views), view.candidate.describe())
+        log.info("  captured view %d/%d (%s)", len(done) + number + 1, len(done) + len(views), view.candidate.describe())
         if robot.live:
-            robot.live.view_captured(session.views_dir(obj.id) / f"view_{index:03d}", index)
+            robot.live.view_captured(session.views_dir(obj.id) / f"view_{index:03d}", len(done) + number)
     if robot.live:
         robot.live.end_object()
 

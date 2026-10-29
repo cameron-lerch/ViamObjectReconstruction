@@ -4,6 +4,7 @@
     python scan.py --plan-only      # plan every object on the latest survey (no motion)
     python scan.py --max-views 16   # about half the time: 16 views per object, spread over all directions
     python scan.py --full-scan      # 50 frames per view, every raw frame saved (a dataset; about 2 min per view)
+    python scan.py --full-scan --resume data/20261029-155544   # finish an interrupted scan (same options)
 
 The steps on their own, for troubleshooting (the arm only moves with --execute;
 without it, they look and plan from wherever the arm is now):
@@ -25,6 +26,7 @@ import asyncio
 import json
 import logging
 import time
+from pathlib import Path
 
 import numpy as np
 import open3d as o3d
@@ -227,10 +229,19 @@ def latest_survey(robot: Robot, config: Config):
 
 
 async def scan_everything(robot: Robot, config: Config, execute: bool, max_views: int | None,
-                          truth_file: str = "ground_truth.toml") -> None:
+                          truth_file: str = "ground_truth.toml", resume: str | None = None) -> None:
     ''' Survey, list what's on the table, scan each object (asking first), park the arm,
-    then build every mesh and figure and compare with the calipers where possible. '''
-    if execute:
+    then build every mesh and figure and compare with the calipers where possible.
+
+    With `resume` (a session folder), continue that session instead: its survey is reused,
+    and objects it already started are checked for movement and then finished, skipping
+    the views already captured. '''
+    if resume:
+        session = Session(Path(resume))
+        objects, plane = session.load_scene()
+        robot.set_scene(plane, session.load_clutter())
+        log.info("Resuming %s (its survey; the objects must not have moved)", session.root)
+    elif execute:
         session, objects, plane = await survey_step(robot, config, execute)
     else:
         session, objects, plane = latest_survey(robot, config)
@@ -238,12 +249,20 @@ async def scan_everything(robot: Robot, config: Config, execute: bool, max_views
         log.info("No objects to scan on the table. (Things too low, or not standing in open table, are skipped; see the survey output above.)")
         return
     log.info("\nFound %d object(s) to scan:", len(objects))
+    started = {obj.id: len(pipeline.captured_views(session, obj.id)) if resume else 0 for obj in objects}
     for obj in objects:
-        log.info("  %s", describe_for_person(obj))
+        log.info("  %s%s", describe_for_person(obj), f" ({started[obj.id]} views captured)" if started[obj.id] else "")
 
     scanned, ask_each = [], True
     for obj in objects:
         others = [o for o in objects if o.id != obj.id]
+        if not execute and started[obj.id]:
+            plan = await pipeline.plan_scan(robot, pipeline.scanned_object(session, obj.id), others, config)
+            taken = {pipeline.view_key(r["azimuth_deg"], r["elevation_deg"])
+                     for _, _, r in pipeline.captured_views(session, obj.id) if "azimuth_deg" in r}
+            left = [v for v in plan.views if pipeline.view_key(v.candidate.azimuth_deg, v.candidate.elevation_deg) not in taken]
+            log.info("Object %d: %d views captured, %d still to capture", obj.id, started[obj.id], len(left))
+            continue
         if not execute:
             plan, job, station_plan = await pipeline.plan_object(robot, obj, others, config)
             pipeline.save_plan(session, obj, plan, job, station_plan)
@@ -256,7 +275,14 @@ async def scan_everything(robot: Robot, config: Config, execute: bool, max_views
         if answer == "a":
             ask_each = False
         log.info("\nScanning %s", describe_for_person(obj))
-        await pipeline.scan_object(robot, session, obj, others, plane, config, execute, False, max_views)
+        if started[obj.id]:
+            try:
+                await pipeline.check_unmoved(robot, session, obj, others, plane, config)
+            except pipeline.ObjectMoved as moved:
+                log.error("  %s", moved)
+                continue
+        await pipeline.scan_object(robot, session, obj, others, plane, config, execute, False, max_views,
+                                   resume=bool(started[obj.id]))
         scanned.append(obj)
     if not execute:
         log.info("\nPlanned only (nothing moved). Run python scan.py to scan.")
@@ -425,6 +451,9 @@ def main() -> None:
     parser.add_argument("--confirm-moves", action="store_true", help="show and confirm every single arm move")
     parser.add_argument("--confirm-above", type=float, metavar="DEG",
                         help="show every move, but only ask when some joint turns at least DEG degrees")
+    parser.add_argument("--resume", metavar="SESSION",
+                        help="continue an interrupted scan in that session folder (e.g. data/20261029-155544): "
+                             "reuses its survey, checks the objects haven't moved, skips views already captured")
     parser.add_argument("--full-scan", action="store_true",
                         help="50 frames per scan view, and every raw frame saved (a dataset to subsample later; "
                              "about 2 minutes per view)")
@@ -466,7 +495,8 @@ def main() -> None:
                              f"(about {minutes:.0f} minutes each; Ctrl+C, the live viewer's Stop, or the e-stop stops it). "
                              "Start? [y/N] ").strip().lower() not in ("y", "yes"):
             return
-        asyncio.run(with_robot(config, lambda robot: scan_everything(robot, config, execute, args.max_views, args.truth_file),
+        asyncio.run(with_robot(config, lambda robot: scan_everything(robot, config, execute, args.max_views, args.truth_file,
+                                                                     args.resume),
                                args.confirm_moves, args.confirm_above, go_ready=execute))
     elif args.command == "demo":
         run_demo(config, args.progression)

@@ -24,7 +24,7 @@ def run(monkeypatch, answers, objects=3, execute=True):
         calls.append("survey")
         return FakeSession(), [block(k) for k in range(objects)], None
 
-    async def scan_object(robot, session, obj, others, plane, config, execute, step, max_views):
+    async def scan_object(robot, session, obj, others, plane, config, execute, step, max_views, resume=False):
         calls.append(f"scan {obj.id}")
 
     async def plan_object(robot, obj, others, config):
