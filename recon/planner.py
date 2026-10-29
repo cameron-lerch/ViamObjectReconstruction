@@ -53,6 +53,9 @@ async def plan_scan(robot: Robot, obj: DetectedObject, others: list[DetectedObje
     plan = ScanPlan(obj)
     previous = None
     for candidate in order_for_travel(generate_candidates(obj, config.views)):
+        if candidate.eye[2] - obj.bottom_z < config.views.min_camera_height:
+            plan.unreachable.append((candidate, f"camera would be under {config.views.min_camera_height:.0f}mm above the table"))
+            continue
         roll, pose, result = await robot.plan_best_roll(config.machine.camera, candidate.pose, world_state, previous)
         if pose is None:
             plan.unreachable.append((candidate, result))

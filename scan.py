@@ -3,6 +3,7 @@
     python scan.py                  # the whole scan: asks once before the arm moves, then before each object
     python scan.py --plan-only      # survey from where the camera is and plan every object (no motion)
     python scan.py --max-views 16   # about half the time: 16 views per object, spread over all directions
+    python scan.py --low-ring       # add a ring of views at 15deg, for rounded objects (sphere, pumpkin)
 
 The steps on their own, for troubleshooting (the arm only moves with --execute;
 without it, they look and plan from wherever the arm is now):
@@ -32,7 +33,7 @@ from scipy.spatial.transform import Rotation
 from recon import pipeline, synthetic
 from recon.config import Config, load_config
 from recon.measure import compare, identify, load_truth, measure
-from recon.figures import doubling_counts, progression_figure
+from recon.figures import doubling_counts, facing_the_arm, progression_figure
 from recon.progression import progression, shape_error
 from recon.progression import table as progression_table
 from recon.reconstruct import object_mask, surface_distances
@@ -332,7 +333,8 @@ def run_progression(args, config: Config) -> None:
                  obj.id, len(views), args.order, progression_table(rows), folder)
         counts = args.counts or doubling_counts(len(views))
         progression_figure(folder, session.object_dir(obj.id) / "progression.svg",
-                           f"Object {obj.id}: reconstruction from 1 to {len(views)} views", sorted(c for c in counts if c <= len(views)))
+                           f"Object {obj.id}: reconstruction from 1 to {len(views)} views, seen from the arm's side",
+                           sorted(c for c in counts if c <= len(views)), azimuth=facing_the_arm(scanned.center))
 
 
 def run_demo(config: Config, with_progression: bool = False) -> None:
@@ -391,6 +393,9 @@ def main() -> None:
     parser.add_argument("--confirm-moves", action="store_true", help="show and confirm every single arm move")
     parser.add_argument("--confirm-above", type=float, metavar="DEG",
                         help="show every move, but only ask when some joint turns at least DEG degrees")
+    parser.add_argument("--low-ring", action="store_true",
+                        help="add a ring of views at [views] low_ring_deg (15deg) for rounded objects; "
+                             "views that would bring the camera under min_camera_height (80mm) above the table are skipped")
     parser.add_argument("--max-views", type=int, help="scan: capture only N of each object's views, spread over all directions (16 measured every side of the test blocks)")
     parser.add_argument("--reuse-survey", action="store_true", help="scan: use the latest survey instead of surveying again")
     parser.add_argument("--objects", type=object_list, help="object ids from the survey, e.g. 0,2 (default: all)")
@@ -415,6 +420,10 @@ def main() -> None:
     for noisy in ("viam", "grpclib", "asyncio"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     config = load_config(args.config)
+    if args.low_ring:
+        config.views.elevations_deg = sorted({*config.views.elevations_deg, config.views.low_ring_deg})
+        log.info("Rings at %s deg; the camera stays at least %.0fmm above the table",
+                 ", ".join(f"{e:g}" for e in config.views.elevations_deg), config.views.min_camera_height)
 
     if args.command is None:
         execute = not args.plan_only

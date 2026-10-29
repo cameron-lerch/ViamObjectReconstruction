@@ -26,6 +26,8 @@ standoff = 280               # camera to nearest point of the object
 elevations_deg = [25, 50, 72]
 azimuth_step_deg = 30
 min_coverage = 0.85          # below this, the object is moved to a scan station
+min_camera_height = 80       # no view puts the camera lower than this above the table (mm)
+low_ring_deg = 15            # the extra ring `scan.py --low-ring` adds
 
 [capture]
 settle_s = 0.6               # pause after each move before taking frames

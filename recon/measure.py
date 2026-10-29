@@ -21,15 +21,17 @@ def load_truth(path: Path) -> dict:
         return tomllib.load(file)
 
 
-def measure(mesh: o3d.geometry.TriangleMesh, shape: str) -> dict:
+def measure(mesh: o3d.geometry.TriangleMesh, shape: str, table_z: float | None = None) -> dict:
     ''' Height, plus width and length (box) or diameter (cylinder), of an upright object.
 
-    The mesh's lowest point is taken as the table (closed meshes have a flat bottom there).
+    The mesh's lowest point is taken as the table (closed meshes have a flat bottom
+    there), unless `table_z` gives it (for an observed mesh, which stops above the table).
     '''
     # 60000 surface samples: dense enough for fits to a few hundredths of a mm on these
     # objects. The top is the 99.9th percentile so a stray triangle can't raise it.
     points = np.asarray(mesh.sample_points_uniformly(60000).points)
-    bottom, top = points[:, 2].min(), np.percentile(points[:, 2], 99.9)
+    bottom = points[:, 2].min() if table_z is None else table_z
+    top = np.percentile(points[:, 2], 99.9)
     height = float(top - bottom)
     band = points[(points[:, 2] > bottom + 0.25 * height) & (points[:, 2] < bottom + 0.75 * height)]
     result = {"height": height}

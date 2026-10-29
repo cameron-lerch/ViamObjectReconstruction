@@ -13,14 +13,14 @@ import numpy as np
 from .board import BoardSpec, depth_model, detect, hand_eye, locate_flat
 from .calibrate import MountCalibration, apply_mount, calibrate_mount
 from .config import Config
-from .figures import doubling_counts, progression_figure
+from .figures import doubling_counts, facing_the_arm, progression_figure
 from .planner import ScanPlan, plan_scan, spread_views
 from .progression import progression
 from .reconstruct import reconstruct, save_reconstruction
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
 from .rgbd import back_project, load_view, load_views, save_view
 from .robot import Robot
-from .scene import DetectedObject, TablePlane, clutter_around, detect_objects, fit_table_plane, merge_views
+from .scene import DetectedObject, TablePlane, clutter_around, detect_objects, fit_table_plane, merge_views, views_agree
 from .session import Session
 from .transforms import look_at
 
@@ -162,7 +162,7 @@ async def survey(robot: Robot, session: Session, config: Config, execute: bool) 
 
     # Detect in each view on its own: with camera calibration error, the views
     # disagree by several millimeters, and merging their clouds smears objects.
-    detections, skipped, planes = [], [], []
+    detections, skipped, planes, clouds = [], [], [], []
     for folder in folders:
         view = load_view(folder)
         points, colors, _ = back_project(view, 2, config.camera.min_depth, config.camera.max_depth)
@@ -171,7 +171,20 @@ async def survey(robot: Robot, session: Session, config: Config, execute: bool) 
         detections.append((view.camera_position[:2], detect_objects(points, view_plane, config.workspace, colors, others)))
         skipped.append((view.camera_position[:2], others))
         planes.append(view_plane)
-    objects = merge_views(detections)
+        clouds.append((points, view_plane.height(points)))
+    # A patch of bad depth (on bare table near an image's edge, say) can look like a
+    # small object in one view. Keep an object only if at least half of the views that
+    # saw its spot saw something standing there (on armfarm14, every such phantom was
+    # tall in 1 of 3-5 views; real objects in nearly all).
+    objects = []
+    for obj in merge_views(detections):
+        seen, standing = views_agree(obj, clouds)
+        if 2 * standing >= seen:
+            objects.append(obj)
+        else:
+            log.info("  skipped something at (%.0f, %.0f), %.0f x %.0f x %.0fmm: only %d of the %d survey views that "
+                     "saw its spot saw it standing (a patch of bad depth)", *obj.center[:2], *obj.size, standing, seen)
+    objects = [DetectedObject(index, o.center, o.size, o.yaw_deg, o.n_points, o.color) for index, o in enumerate(objects)]
     clutter = clutter_around(objects, merge_views(skipped))
     # Keep the table as seen by the camera closest to the objects.
     middle = np.mean([obj.center[:2] for obj in objects], axis=0) if objects else detections[0][0]
@@ -402,7 +415,8 @@ def progression_snapshot(session: Session, object_id: int, plane: TablePlane, co
     progression(views, obj, plane, config, folder, counts, refine=refine)
     svg = session.object_dir(object_id) / "progression.svg"
     named = f" ({obj.color_name})" if obj.color_name else ""
-    progression_figure(folder, svg, f"Object {object_id}{named}: reconstruction from 1 to {len(views)} views", counts)
+    progression_figure(folder, svg, f"Object {object_id}{named}: reconstruction from 1 to {len(views)} views, seen from the arm's side",
+                       counts, azimuth=facing_the_arm(obj.center))
     log.info("  progression figure: %s", svg.with_suffix(".png") if svg.with_suffix(".png").exists() else svg)
     return svg
 

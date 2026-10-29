@@ -40,6 +40,21 @@ def test_unseen_wall_is_filled_straight_down_from_the_outline():
     assert np.asarray(mesh.vertices)[:, 0].max() == pytest.approx(20, abs=2.5)
 
 
+def test_wall_tucks_in_under_a_rounded_object():
+    # A ball resting on the table, seen down to 15mm above it: its surface curves back
+    # in below the widest point, so the closed mesh must not hang a wall from there.
+    ball = o3d.geometry.TriangleMesh.create_sphere(40, 60).translate((0, 0, 40))
+    ball.compute_vertex_normals()
+    cloud = surface_cloud(ball, lambda p: p[:, 2] > 15)
+    mesh = close_with_flat_bottom(cloud, TABLE, shrink=0.0)
+    vertices = np.asarray(mesh.vertices)
+    radius = np.linalg.norm(vertices[:, :2], axis=1)
+    assert boundary_edge_count(mesh) == 0
+    # At 15mm up the ball is 31mm across in radius; the old straight wall was 40mm.
+    assert radius[(vertices[:, 2] > 5) & (vertices[:, 2] < 12)].max() < 36
+    assert radius[vertices[:, 2] > 35].max() == pytest.approx(40, abs=2)
+
+
 def test_progression_improves_with_more_views(tmp_path):
     config = Config()
     config.views.azimuth_step_deg = 60

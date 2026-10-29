@@ -28,3 +28,11 @@ width = 30.15
 length = 29.18
 height = 29.44
 measured = { width = [30.15, 30.17, 30.13], length = [29.09, 29.16, 29.29], height = [29.40, 29.48] }
+
+[printed_block]
+# 3D-printed from CAD (calibration/printed_objects/calibration_block.step); calipers agree
+# with the CAD within 0.15mm (2026-10-29), so these are the CAD dimensions. Black, glossy PLA.
+shape = "box"
+width = 40.0
+length = 40.0
+height = 60.0

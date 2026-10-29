@@ -206,35 +206,45 @@ def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceCo
 
 
 def table_support(obj: DetectedObject, points: np.ndarray, heights: np.ndarray, inner: float = 5.0,
-                  outer: float = 60.0, spacing: float = 5.0) -> float:
-    ''' Share of a ring around the object's footprint (from `inner` to `outer` mm out)
-    that is bare table: points within 5mm of the table plane.
+                  outer: float = 60.0, spacing: float = 5.0) -> tuple[float, float]:
+    ''' How open the table around an object is, over a ring around its footprint (from
+    `inner` to `outer` mm out): (share of the ring the camera saw that is bare table,
+    share of the ring the camera didn't see at all).
 
     Scan targets stand in open table. Cables at the table's edge or beside a power
     strip, and things in a gap between tables, have floor, gaps or other things
-    around part of them.
+    around part of them. The floor beyond the table's edge is out of the camera's
+    range, so it shows up as unseen. A tall object also hides some table behind it
+    from the survey camera (a 200mm pumpkin hid 11% of its ring from 600mm up), so
+    unseen cells aren't counted as 'not table'; instead, too many of them is its own test.
     '''
     table_xy = points[np.abs(heights) < 5.0][:, :2]  # 5mm: the survey's table noise from 600mm up
     if len(table_xy) == 0:
-        return 0.0
+        return 0.0, 1.0
     half = obj.size[:2] / 2 + outer
     u, v = np.meshgrid(np.arange(-half[0], half[0] + spacing, spacing), np.arange(-half[1], half[1] + spacing, spacing))
     local = np.column_stack([u.ravel(), v.ravel()])
     in_ring = np.any(np.abs(local) > obj.size[:2] / 2 + inner, axis=1)
     c, s = np.cos(np.radians(obj.yaw_deg)), np.sin(np.radians(obj.yaw_deg))
     ring = local[in_ring] @ np.array([[c, s], [-s, c]]) + obj.center[:2]
-    gaps, _ = cKDTree(table_xy).query(ring, distance_upper_bound=spacing)
-    return float(np.isfinite(gaps).mean())
+    on_table = np.isfinite(cKDTree(table_xy).query(ring, distance_upper_bound=spacing)[0])
+    seen = np.isfinite(cKDTree(points[:, :2]).query(ring, distance_upper_bound=spacing)[0])
+    if not seen.any():
+        return 0.0, 1.0
+    return float(on_table[seen].mean()), float(1.0 - seen.mean())
 
 
 def not_a_target(obj: DetectedObject, points: np.ndarray, heights: np.ndarray, workspace: WorkspaceConfig) -> str:
     ''' Why something on the table isn't a scan target ("" if it is one). '''
     if obj.size[2] < workspace.min_object_top:
         return f"under {workspace.min_object_top:.0f}mm tall (a cord or flat clutter)"
-    support = table_support(obj, points, heights, outer=workspace.clear_margin)
+    support, unseen = table_support(obj, points, heights, outer=workspace.clear_margin)
     if support < workspace.min_table_support:
         return (f"not in open table (only {support:.0%} of the {workspace.clear_margin:.0f}mm around it is bare table): "
-                "at an edge, in a gap, or beside something else")
+                "beside something else, or in a gap")
+    if unseen > workspace.max_unseen_share:
+        return (f"can't see enough table around it ({unseen:.0%} of the {workspace.clear_margin:.0f}mm around it is unseen): "
+                "at the table's edge, or seen from too far to the side")
     return ""
 
 
@@ -253,6 +263,25 @@ def merge_views(detections: list[tuple[np.ndarray, list[DetectedObject]]], gap: 
         if all(np.linalg.norm(obj.center[:2] - other.center[:2]) > other.footprint_radius + gap for other in kept):
             kept.append(obj)
     return [DetectedObject(index, o.center, o.size, o.yaw_deg, o.n_points, o.color) for index, o in enumerate(kept)]
+
+
+def views_agree(obj: DetectedObject, clouds: list[tuple[np.ndarray, np.ndarray]]) -> tuple[int, int]:
+    ''' How many survey views saw `obj`'s spot, and how many of them saw something standing there.
+
+    `clouds` holds each view's points and their heights above that view's table. A view
+    saw the spot if it has at least 5 points within the object's outline (a circle of
+    half its shorter side); it saw something standing if the highest of them (95th
+    percentile) reach half the object's height. The whole outline, not just its middle,
+    so a bowl's rim counts (its middle is its floor).
+    '''
+    radius = 0.5 * min(obj.size[:2])
+    seen = standing = 0
+    for points, heights in clouds:
+        inside = np.linalg.norm(points[:, :2] - obj.center[:2], axis=1) < radius
+        if inside.sum() >= 5:
+            seen += 1
+            standing += bool(np.percentile(heights[inside], 95) >= 0.5 * obj.size[2])
+    return seen, standing
 
 
 def clutter_around(objects: list[DetectedObject], skipped: list[DetectedObject], gap: float = 15.0) -> list[DetectedObject]:

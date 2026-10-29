@@ -53,6 +53,40 @@ def row_figure(svg: Path, title: str, panels: list[tuple[np.ndarray, str, str]],
     write_svg(svg, parts)
 
 
+def comparison_figure(svg: Path, title: str, columns: list[tuple[str, list[np.ndarray], list[str]]],
+                      takeaway: str, note: str = "") -> None:
+    ''' Side-by-side setups of the same object (uncalibrated vs. calibrated camera, one
+    camera vs. another): each column is a label, its renders and lines of metrics, with
+    one takeaway line across the bottom. '''
+    gap, top = 14, 52
+    lines = max(len(metrics) for _, _, metrics in columns)
+    column_widths = [len(images) * PANEL + (len(images) - 1) * gap for _, images, _ in columns]
+    width = sum(column_widths) + (len(columns) + 1) * 2 * gap
+    metrics_top = top + PANEL + 30
+    takeaway_top = metrics_top + lines * 20 + 18
+    height = takeaway_top + 46 + (24 if note else 0)
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+             'font-family="Liberation Sans, Arial, Helvetica, sans-serif">',
+             f'<rect width="{width}" height="{height}" rx="14" fill="#FFFFFF"/>',
+             f'<text x="{width / 2}" y="32" text-anchor="middle" font-size="22" font-weight="700" fill="#1F2933">{title}</text>']
+    x = 2 * gap
+    for (label, images, metrics), column_width in zip(columns, column_widths):
+        for k, image in enumerate(images):
+            parts.append(f'<image x="{x + k * (PANEL + gap)}" y="{top}" width="{PANEL}" height="{PANEL}" '
+                         f'href="data:image/png;base64,{png_base64(image)}"/>')
+        middle = x + column_width / 2
+        parts.append(f'<text x="{middle}" y="{top + PANEL + 14}" text-anchor="middle" font-size="18" font-weight="700" fill="#1F2933">{label}</text>')
+        for k, line in enumerate(metrics):
+            parts.append(f'<text x="{middle}" y="{metrics_top + 14 + k * 20}" text-anchor="middle" font-size="14" fill="#3E4C59">{line}</text>')
+        x += column_width + 2 * gap
+    parts.append(f'<rect x="{2 * gap}" y="{takeaway_top}" width="{width - 4 * gap}" height="36" rx="8" fill="#E8F0FA"/>')
+    parts.append(f'<text x="{width / 2}" y="{takeaway_top + 24}" text-anchor="middle" font-size="16" font-weight="700" fill="#1F2933">{takeaway}</text>')
+    if note:
+        parts.append(f'<text x="{width / 2}" y="{height - 10}" text-anchor="middle" font-size="13" font-style="italic" fill="#3E4C59">{note}</text>')
+    parts.append("</svg>")
+    write_svg(svg, parts)
+
+
 def color_measured(mesh: o3d.geometry.TriangleMesh, measured: np.ndarray) -> o3d.geometry.TriangleMesh:
     ''' Gray-blue where the closed mesh lies on measured data, orange where it was filled in. '''
     gaps, _ = cKDTree(measured).query(np.asarray(mesh.vertices))
@@ -83,13 +117,21 @@ def progression_figure(folder: Path, svg: Path, title: str, counts: list[int],
         row = rows[str(k)]
         # The measured share (of the closed mesh's surface) is on one scale for every
         # count; completeness is relative to the all-views scan and always ends at 100%.
-        sub = (f"{row['measured_share']:.0%} of surface measured, roughness {row['roughness_mm']:.2f}mm"
+        measured = (f"{row['measured_share']:.0%} of surface measured" if row.get("measured_share") is not None
+                    else "too little seen to close")
+        sub = (f"{measured}, roughness {row['roughness_mm']:.2f}mm"
                if row.get("roughness_mm") == row.get("roughness_mm") and row.get("roughness_mm") is not None else "nothing measured")
         panels.append((render(observed, PANEL, elevation, azimuth, center, radius), f"{k} view{'s' if k > 1 else ''}: observed", sub))
     cloud = np.asarray(o3d.io.read_triangle_mesh(str(folder / f"views_{last:02d}" / "observed.ply")).vertices)
     panels.append((render(color_measured(closed, cloud), PANEL, elevation, azimuth, center, radius, use_colors=True),
                    f"{last} views: closed", f"{rows[str(last)]['measured_share']:.0%} measured; orange = filled in"))
     row_figure(svg, title, panels, "Observed meshes: 1 view keeps all it saw; 2+ views keep surface at least 2 of them agree on. Red lines mark open edges.")
+
+
+def facing_the_arm(center) -> float:
+    ''' Render azimuth (deg) looking at an object from the arm's base, the side the
+    scan's cameras could reach best (far sides can be out of reach). '''
+    return float(np.degrees(np.arctan2(-center[1], -center[0])))
 
 
 def doubling_counts(n: int) -> list[int]:

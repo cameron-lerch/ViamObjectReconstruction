@@ -151,7 +151,7 @@ The most complete real scans so far (session 20261028-093620): an orange block a
   <br><sub><b>REAL DATA.</b> Green cylinder, armfarm14, 2026-10-28</sub>
 </p>
 
-Every scan now also saves a figure of its reconstruction from 1, 2, 4, 8, 16 and all views (`object_NN/progression.png` in the session folder):
+Every scan now also saves a figure of its reconstruction from 1, 2, 4, 8, 16 and all views (`object_NN/progression.png` in the session folder), seen from the arm's side, where the cameras could reach best (the two below predate that and use a fixed angle):
 
 <p align="center">
   <img src="media/images/progression_block_34views.png" alt="Orange block reconstructed from 1, 2, 4, 8, 16, 32 and 34 views: a sliver of the top from 1 view, scattered patches from 2 and 4, a holey box from 8, a complete box from 16 on, and the closed 34-view mesh" width="1000">
@@ -241,20 +241,24 @@ The same pipeline on rendered views of known shapes (`python scan.py demo --prog
 **Calibrating the camera mount.** The same 25 real captures, aligned and fused identically; only the camera mount differs:
 
 <p align="center">
-  <img src="media/images/calibration_before_after.png" alt="Uncalibrated, the 25 views smear into a T-shaped mess; calibrated, they form a recognizable cylinder" width="900">
+  <img src="media/images/calibration_before_after.png" alt="Side by side: uncalibrated, the 25 views' observed surface smears into a T-shaped mess, 45.5mm across and 66mm tall, 32% off on average; calibrated, a clean cylinder 32.2mm across and 60.3mm tall, 5% off. Takeaway: 7 times the error without calibration" width="1000">
   <br><sub><b>REAL DATA.</b> The same 25 armfarm14 views of the green cylinder</sub>
 </p>
 
-"Uncalibrated" is the camera mount as it was first entered in the Viam app (measured by hand, 21mm and 2.2° from the calibrated one); these views were captured with it. Both rows include the alignment step, which can't rescue a mount that far off: it rejected 14 of the 25 views' corrections. Rebuilt from the same saved views:
+"Uncalibrated" is the camera mount as it was first entered in the Viam app (measured by hand, 21mm and 2.2° from the calibrated one); these views were captured with it. **Uncalibrated, the mesh's size was off by 32% on average; calibrated, by 5%: 7× the error without calibration.** Both use the alignment step, which can't rescue a mount that far off: it rejected 14 of the 25 views' corrections.
 
-| Camera mount | Alignment | Views disagree by (median) | Diameter (calipers 29.53mm) | Roundness |
-|---|---|---|---|---|
-| Uncalibrated | off | 3.66mm | 57.05mm | 2.13mm |
-| Uncalibrated | on | 2.47mm | 52.87mm | 3.55mm |
-| Calibrated | off | 0.76mm | 30.87mm | 1.22mm |
-| Calibrated | on | 0.53mm | 32.22mm | 0.29mm |
+The figure measures the **observed** surface (what the camera saw, height from the table up), not the closed mesh: Poisson can't reliably close views as badly misaligned as the uncalibrated ones, and sometimes balloons ([§5.9](#59-closing-the-mesh-with-a-flat-bottom)). Its layout takes more columns, so a scan of the same object with another camera (the Orbbec Astra 2) can go alongside. Rebuilt from the same saved views (stable to 0.1mm across reruns):
 
-One open question: with the calibrated mount, turning alignment *off* gives a diameter 1.35mm closer to the calipers, though a far less round one. On the 34-view scans of [§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views) the picture is mixed: without alignment the cylinder is 1.1mm closer (31.14 vs. 32.28mm), but the block gets one side closer and the other farther (31.82 × 35.40mm vs. 33.50 × 33.77mm), and the views disagree almost twice as much (about 1.0mm vs. 0.57mm). Alignment is not the main source of the size error, but how it moves round objects is worth a closer look.
+| Camera mount | Alignment | Views disagree by (median) | Diameter (calipers 29.53mm) | Height (calipers 59.93mm) | Roundness |
+|---|---|---|---|---|---|
+| Uncalibrated | off | 3.66mm | 50.9mm | 64.3mm | 2.5mm |
+| Uncalibrated | on | 2.48mm | 45.4mm | 66.0mm | 2.35mm |
+| Calibrated | off | 0.76mm | **28.9mm** | 60.3mm | 0.75mm |
+| Calibrated | on | 0.53mm | 32.2mm | 60.3mm | **0.29mm** |
+
+Roundness is the median distance of the wall's points from the best-fitting circle.
+
+One open question: with the calibrated mount, turning alignment *off* gives a diameter within 0.65mm of the calipers (28.9 vs. 32.2mm with it on), though a less round one. On the 34-view scans of [§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views) the picture is mixed: without alignment the cylinder is 1.1mm closer (31.14 vs. 32.28mm), but the block gets one side closer and the other farther (31.82 × 35.40mm vs. 33.50 × 33.77mm), and the views disagree almost twice as much (about 1.0mm vs. 0.57mm). Alignment is not the main source of the size error, but how it moves round objects is worth a closer look.
 
 **Aligning all views together.** The same 37 synthetic views, aligned two ways:
 
@@ -351,13 +355,32 @@ Each view is processed on its own:
 5. **Boxes:** for each cluster, the smallest rectangle around its footprint (rotating calipers on its convex hull) gives the center, length, width and heading; the height runs from the table to the 98th-percentile top. Its median color is printed with its id (green, yellow, ...), only to help a person tell objects apart; nothing selects or treats objects by color, and `--objects` takes ids. Measured hues on this table: yellow 43°, green 154°, orange 11°; table and cables are gray (saturation under 0.1).
 6. **Scan targets only.** Not everything standing on a table is something to scan. There is no size limit: whether an object can be scanned all around is up to the view planner (§5.2), and an object too wide for the gripper is simply never relocated. A cluster is skipped, with its reason printed, if it is:
    - under 25mm tall (cords, cables lying flat);
-   - not in open table: less than 90% of a ring 5-60mm around its footprint is bare table (within 5mm of the plane). That rules out cords at the table's edge, things in a gap between tables, and things beside a power strip. It also means two objects closer than about 60mm reject each other.
+   - not in open table, judged by **the ring** (below): less than 90% of the part of the ring the camera saw is bare table, or more than 25% of the ring went unseen.
 
-On the armfarm14 table, the survey found 10 things above the table: the three blocks, the arm's base and its cables, a clamp-on power strip at the table's edge, and cords. The rules above keep exactly the three blocks.
+**The ring.** To tell a scan target from clutter, the survey looks at the table *around* each cluster. It lays a 5mm grid over a band around the cluster's box, from 5mm to 60mm outside it on every side (a rectangular ring, like a picture frame), and checks each grid cell in that view's points:
+
+- **bare table**: a point within 5mm of the table plane lies within 5mm of the cell;
+- **something else**: the camera saw a point there, but not at table height (another object, a cable, a gap with floor in range);
+- **unseen**: no point at all. The floor beyond the table's edge is out of the camera's range, so it is unseen; so is table hidden behind a tall object (its "shadow" from the survey camera).
+
+<p align="center">
+  <img src="media/diagrams/open_table_ring.png" alt="Three panels. 1: a tall object in open table, seen from above, with a 5mm grid ring around its box; the cells behind it, away from the survey camera, are unseen (its shadow) and all the others are bare table: 100% of the seen ring is bare, 22% unseen, so it is a scan target. 2: an object at the table's edge with a cable passing by; the cells past the edge are unseen and the cable's cells are something else: 91% of the seen ring bare but 31% unseen, so it is an obstacle. 3: a side view of the survey camera 600mm up and a 200mm-tall object, whose top hides a strip of table behind it, inside the ring" width="1000">
+  <br><sub><b>DIAGRAM.</b> The cells are classified with the same rule as the code (<a href="tools/make_ring_diagram.py"><code>tools/make_ring_diagram.py</code></a>); the scenes are illustrations</sub>
+</p>
+
+A target needs at least 90% of the **seen** cells to be bare table, and at most 25% of the ring unseen. A block in open table scores 98-100% bare with 0-3% unseen. The power strip at the table's edge has cables and floor around it (72-91% bare, 17-57% unseen), and cables at the edge are 31-37% unseen; both are skipped. The 60mm also means two objects closer than about 60mm reject each other. Each view judges its own detections, and an object only needs one view (usually the one most nearly above it) to pass.
+
+Unseen cells are judged separately because a tall object hides some table from the survey camera 600mm up: from 72mm off to the side, a 200mm pumpkin hid 11% of its ring, and counting that as "not table" rejected it (87% < 90%). Things that are rejected (and anything too short) are still kept as obstacles (below).
+
+**Choosing what to scan.** `python scan.py` lists every target with its id, color, size and center, and asks before scanning each one (Enter, `n` to skip, `a` for all the rest, `q` to stop); the step-by-step commands take `--objects` with ids.
+
+On the armfarm14 table, the surveys found the test objects plus the arm's base and its cables, a clamp-on power strip at the table's edge, and cords; the rules above keep the test objects. A coil of cable can occasionally pass (one 31mm-tall gray coil, seen from far to the side, had 99% bare table and 23% unseen), which is one reason the scan asks before each object.
 
 #### Combining the views
 
 The same object appears in several views. Each object is taken from the view that saw it closest to straight below the camera, where it is least distorted; any other detection whose center falls within that object's footprint (plus 15mm) is the same object or a fragment of it. Objects are detected per view, not after merging the views' point clouds: when the camera calibration was off, merged clouds smeared each block into a box over 100mm wide ([§8.2](#82-detection)). One limit: in steep, oblique views a real block's own sides and shadow fill part of its ring, so it may only pass the open-table test from a view more directly above it. The overhead grid provides one for anything on the table.
+
+**Views must agree.** A patch of bad depth can look like a small object in one view: on bare, textureless table near an image's edge, the RealSense sometimes reads a blob 30mm too close. So an object is kept only if at least half of the survey views that saw its spot saw something standing there: the highest points (95th percentile) within its outline reaching half its height. The whole outline counts, not just its middle, so a bowl passes by its rim. On armfarm14's saved surveys, every such phantom (gray, about 25-30mm, over empty table) stood in only 1 of 3-5 views, and every real object, including the black printed sphere and bowl, in at least half.
 
 #### Everything else is an obstacle
 
@@ -556,9 +579,17 @@ That is `observed.obj`: everything in it was measured, and it is open wherever n
 The objects rest flat on the table, which gives two priors:
 
 - the **bottom** is the object's outline seen from above, lying on the table plane;
-- a **wall that was never seen** most likely drops straight down from that outline.
+- a **wall that was never seen** most likely drops straight down from the **lowest place the surface was seen**. On a block that is the outline itself. On a rounded object, such as a pumpkin, the surface curves back in below its widest point, so the wall drops from where the camera last saw it, tucked in underneath, not from the widest outline.
 
-The final `mesh.obj` is a screened Poisson surface fit through the observed surface points (with their normals), plus points filling the bottom outline (normals pointing down), plus straight-wall points only where no observed surface lies within 3mm. The lowest 5mm of observed surface is replaced by the straight-wall prior (depth pixels where wall meets table flare outward), anything below the table is flattened onto it, and the outline is shrunk by 1mm because edge noise pads it. The result is closed (no open edges), so it has a volume. [§6](#6-measured-vs-filled-in) shows which parts are measured and which are filled in.
+To find that place, the closing looks inward from each point of the outline (up to 60mm, within a 3mm-wide line) for the lowest observed surface whose normal faces outward along that line (so the top and the opposite wall don't count). The lowest point is the 5th percentile by height, so one stray reading can't set it, and neighboring outline points (within 6mm) are smoothed together. The wall hangs from there, and the flat bottom shrinks to match. Where nothing outward-facing was seen, the wall drops from the outline as before.
+
+Before closing, scraps of table are dropped: points less than 15mm above the table that lie more than 3mm outside the outline of everything higher. An object's outline seen from above contains all of its surface, even what is tucked in underneath, so a low point outside it is table that fusion kept (from the object's shadow, or flared depth pixels). On the second pumpkin scan, about 2,700 such points, out to 146mm from its center, made Poisson balloon into a 2-meter bubble on one run and not on another; each block scan had 7-8.
+
+Poisson can't close a thin sliver, such as 2 views of a pumpkin's top: it balloons into a surface far bigger than the object. A closed mesh that reaches more than 20mm past the points it was fit to (checked after flattening onto the table) is discarded, and the result says "too little seen to close" instead of reporting a meaningless volume.
+
+The final `mesh.obj` is a screened Poisson surface fit through the observed surface points (with their normals), plus points filling the bottom (normals pointing down), plus straight-wall points only where no observed surface lies within 3mm. The lowest 5mm of observed surface is replaced by the straight-wall prior (depth pixels where wall meets table flare outward), anything below the table is flattened onto it, and the outline is shrunk by 1mm because edge noise pads it. The result is closed (no open edges), so it has a volume. [§6](#6-measured-vs-filled-in) shows which parts are measured and which are filled in.
+
+**Example: the pumpkin (real scan, 2026-10-28, 30 views).** The 25° views saw the side facing the arm's base down to about 15mm above the table, curving in from a radius of 85mm at the widest point to about 62mm. The first version of this closing hung its walls from the widest outline anyway, so the closed mesh was a cylinder of radius 87-91mm all the way down, and the pumpkin looked projected onto the table. With the walls hung from the lowest seen surface, the closed mesh follows the measured curve on that side (radius 67-74mm in the lowest 30mm; a second scan of the same pumpkin gave 69-74mm). The far side had too few 25° views (out of reach, 590-640mm from the base), so nothing below its widest point was measured, and its wall still drops straight from the outline (radius 86-88mm).
 
 ### 5.10 Measuring quality
 
@@ -586,6 +617,8 @@ Every setting that changes how smooth and how accurate the final mesh is, in pip
 | `capture.frames_per_view` | 5 | More frames: less per-pixel noise (median), slower views | judgment |
 | `capture.settle_s` | 0.6s | Longer: less vibration blur, slower scans | judgment |
 | `views.standoff` † | 280mm + object radius | Closer: more pixels on the object and less noise (it grows with distance²), but the camera can't measure closer than about 260mm | judgment |
+| `views.min_camera_height` | 80mm | No planned view puts the camera lower than this above the table: a second guard besides the planner's table slab | judgment |
+| `views.low_ring_deg`, `--low-ring` | 15°, off | Adds a ring for objects whose lower half curves in (a sphere, a pumpkin); the camera stays above `min_camera_height`. For a 60mm sphere it puts the camera about 110mm up, against 164mm at 25° | judgment |
 | `views.elevations_deg`, `views.azimuth_step_deg`, `--max-views` | 25/50/72°, 30° (37 views) | More views: more averaging and coverage, longer scans | **real**: 16 spread views measured every side ([§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views)) |
 | RealSense presets and filters † | camera defaults | "High Accuracy" preset, spatial/temporal filters: smoother depth, fewer readings | not explored yet |
 
@@ -825,6 +858,7 @@ How to read the sizes:
 | `[workspace] min_base_distance` | 350mm | the arm's base and the cables around it are ignored (default 200mm) |
 | `[machine] camera_mount_file` | `calibration/armfarm14_camera_mount.json` | our calibrated camera mount; the app's camera frame is display-only |
 | `[views] standoff` | 280mm | beyond the RealSense's ~260mm minimum range |
+| `[views] min_camera_height` | 80mm | views that would bring the camera lower above the table are skipped |
 | `[capture]` | settle 0.6s, 5 frames | |
 | `[relocate] enabled` | false | until the gripper is measured |
 
@@ -878,7 +912,7 @@ python scan.py demo --progression                     # synthetic table scene: s
 | Command | Moves the arm? | What it does |
 |---|---|---|
 | `calibration.py [--plan-only] [--touch-off ask\|yes\|no]` | yes (asks first) | The whole calibration: camera (board), table (survey), gripper (touch-off, asks first) |
-| `scan.py [--plan-only] [--max-views K]` | yes (asks first) | The whole scan: survey, list the objects, ask before each, scan, park over the mat, build meshes and figures, compare with the calipers where possible |
+| `scan.py [--plan-only] [--max-views K] [--low-ring]` | yes (asks first) | The whole scan: survey, list the objects, ask before each, scan, park over the mat, build meshes and figures, compare with the calipers where possible. `--low-ring` adds a 15° ring for rounded objects |
 | `scan.py survey [--execute]` | with `--execute` | Overhead grid over the table: objects, table plane, calibration board (then a head-on board view); without `--execute`, from the current pose |
 | `scan.py plan [--new-survey]` | no | Reachable views, coverage and relocation decision per object |
 | `scan.py scan --execute [--objects N] [--max-views K] [--reuse-survey]` | yes | Plan, (relocate), capture every object, return home over the mat, then build each mesh and its progression figure. `--max-views K` captures K views spread over all directions (16 is enough to measure every side of the test blocks) |
@@ -889,7 +923,7 @@ python scan.py demo --progression                     # synthetic table scene: s
 | `scan.py compare [--objects N] [--truth NAME]` | no | Measure each mesh like calipers and compare with the `ground_truth.toml` entry it resembles (by shape and size; skipped if none), or with `--truth NAME` |
 | `scan.py touch-off [--execute]` | with `--execute` | Touch bare table with the closed gripper (paper test) to measure the real fingertip reach |
 | `scan.py demo [--progression]` | no | Everything on synthetic data, scored against the truth |
-| `tools/make_figures.py`, `tools/make_tsdf_diagram.py` | no | Regenerate this README's figures and the fusion diagram |
+| `tools/make_figures.py`, `tools/make_tsdf_diagram.py`, `tools/make_ring_diagram.py` | no | Regenerate this README's figures, the fusion diagram and the ring diagram |
 
 Motion options: `--confirm-moves` previews every move (target, joint changes) and waits for Enter; `--confirm-above 45` previews every move but only waits when a joint would turn 45° or more; `--step` asks before each object and each relocation.
 
@@ -947,6 +981,7 @@ tools/
   make_figures.py        this README's result figures
   make_noise_figure.py   one view at a time: color image and raw points per view
   make_tsdf_diagram.py   the fusion diagram
+  make_ring_diagram.py   the open-table ring diagram
 tests/                   61 tests, mostly against synthetic ground truth
 media/                   diagrams (SVG + PNG) and figures
 ```
@@ -1134,3 +1169,38 @@ The color camera has no edge fattening: an object's outline in the color image i
 5. **FoundationStereo on the infrared pair**: new captures and a GPU model.
 6. **Test on harder objects** (mug, bottle, pumpkin, tape roll, 3D-printed shapes) to see where the flat-bottom closing and the fixed rings break down.
 7. **A neural or Gaussian method** (BundleSDF, a depth-supervised 2DGS) as a heavier comparison, once the 3D-printed objects give exact ground truth.
+
+---
+
+## Review
+
+*Earlier text replaced by code changes, kept here for review. Newest first; each entry says what replaced it.*
+
+### 2026-10-29: uncalibrated vs. calibrated table (§3.4)
+
+Replaced after the closing changes of 2026-10-28 (walls from the lowest seen surface, table scraps, the balloon check): the numbers below were measured on closed meshes, which the uncalibrated views can't reliably produce any more. The new table measures the observed surface, from the table up. Old text:
+
+> | Camera mount | Alignment | Views disagree by (median) | Diameter (calipers 29.53mm) | Roundness |
+> |---|---|---|---|---|
+> | Uncalibrated | off | 3.66mm | 57.05mm | 2.13mm |
+> | Uncalibrated | on | 2.47mm | 52.87mm | 3.55mm |
+> | Calibrated | off | 0.76mm | 30.87mm | 1.22mm |
+> | Calibrated | on | 0.53mm | 32.22mm | 0.29mm |
+>
+> One open question: with the calibrated mount, turning alignment *off* gives a diameter 1.35mm closer to the calipers, though a far less round one.
+
+### 2026-10-28: the straight-wall prior (§5.9)
+
+Replaced by walls that hang from the lowest place the surface was seen, after the pumpkin's closed mesh came out as a cylinder below its widest point even where the 25° views had measured the surface curving in. Old text:
+
+> - a **wall that was never seen** most likely drops straight down from that outline.
+>
+> The final `mesh.obj` is a screened Poisson surface fit through the observed surface points (with their normals), plus points filling the bottom outline (normals pointing down), plus straight-wall points only where no observed surface lies within 3mm.
+
+### 2026-10-28: the open-table rule (§5.1)
+
+Replaced by the seen-only rule with a cap on unseen table, after the survey rejected a 200mm-tall pumpkin: its own shadow hid 11% of its ring and counted as "not table" (87% < 90%). Old text:
+
+> - not in open table: less than 90% of a ring 5-60mm around its footprint is bare table (within 5mm of the plane). That rules out cords at the table's edge, things in a gap between tables, and things beside a power strip. It also means two objects closer than about 60mm reject each other.
+
+> On the armfarm14 table, the survey found 10 things above the table: the three blocks, the arm's base and its cables, a clamp-on power strip at the table's edge, and cords. The rules above keep exactly the three blocks.

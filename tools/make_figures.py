@@ -13,6 +13,7 @@ import argparse
 import json
 import logging
 import sys
+import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from recon.config import Config, load_config  # noqa: E402
-from recon.figures import PANEL, color_measured, framing, progression_figure, row_figure  # noqa: E402
+from recon.figures import PANEL, color_measured, comparison_figure, framing, progression_figure, row_figure  # noqa: E402
+from recon.measure import compare, measure  # noqa: E402
 from recon.pipeline import scanned_object  # noqa: E402
 from recon.progression import measured_share  # noqa: E402
 from recon.reconstruct import reconstruct  # noqa: E402
@@ -73,26 +75,54 @@ def observed_vs_closed_figure(session: Session, object_id: int, name: str, title
     figure(name, title, panels, "observed.obj keeps only surface the camera measured; mesh.obj closes it (orange = filled in: the flat bottom and anything unseen).")
 
 
-def calibration_figure(session: Session, object_id: int) -> None:
+def setup_metrics(result, truth: dict) -> tuple[list[str], float]:
+    ''' Metric lines for one setup's observed surface, and its mean size error (% of the
+    calipers). Size error measures accuracy; how far single views lie from the fused
+    surface measures consistency (do the views agree with each other?). '''
+    # Measured on the observed surface (what the camera saw), from the table up: the
+    # closed mesh of badly misaligned views can't always be built.
+    obj = result.report["object"]
+    table_z = obj["center"][2] - obj["size"][2] / 2
+    rows = compare(measure(result.observed, truth["shape"], table_z), truth)
+    lines = [f"{key}: {got:.1f}mm vs. {want:.1f}mm calipers ({error:+.1f}mm)" for key, got, want, error in rows]
+    size_error = float(np.mean([abs(error) / want for _, _, want, error in rows]))
+    lines.append(f"mean size error: {size_error:.1%}")
+    lines.append(f"views disagree by {result.report['median_single_view_deviation_mm']:.2f}mm (median)")
+    return lines, size_error
+
+
+def calibration_figure(session: Session, object_id: int, truth_name: str = "green_cylinder") -> None:
+    ''' The same captures reconstructed with the hand-entered camera mount and with the
+    calibrated one, side by side, against the calipers. The same layout can take more
+    columns, such as another camera's scan of the same object. '''
     logging.disable(logging.WARNING)
     config = load_config(ROOT / "config.toml")
+    truth = tomllib.loads((ROOT / "ground_truth.toml").read_text())[truth_name]
     obj = scanned_object(session, object_id)
     _, plane = session.load_scene()
     views = load_views(session.views_dir(object_id))
     calibration = json.loads((session.root / "mount_calibration.json").read_text())
     swap = np.linalg.inv(np.array(calibration["original"])) @ np.array(calibration["calibrated"])
     calibrated = [type(v)(v.color, v.depth, v.T_world_cam @ swap, v.intrinsics, v.meta, v.name) for v in views]
-    before = reconstruct(views, obj, plane, config)
-    after = reconstruct(calibrated, obj, plane, config)
-    center, radius = framing(after.mesh)
-    panels = []
-    for label, result in (("uncalibrated", before), ("calibrated", after)):
-        deviation = result.report["median_single_view_deviation_mm"]
-        for az in (-60, 120):
-            panels.append((render(result.observed, PANEL, 20, az, center, radius), label,
-                           f"views deviate {deviation:.2f}mm (median)"))
-    figure("calibration_before_after", "Real cylinder, 25 views: uncalibrated vs. calibrated camera", panels,
-           "Same 25 captures, same alignment and fusion; only the camera mount differs (21mm / 2.2° apart). Uncalibrated is the mount entered by hand in the Viam app.")
+    results = {"Uncalibrated camera": reconstruct(views, obj, plane, config),
+               "Calibrated camera": reconstruct(calibrated, obj, plane, config)}
+    # One framing for both, so they are drawn at the same scale.
+    both = np.vstack([np.asarray(r.observed.vertices) for r in results.values()])
+    center = both.mean(axis=0)
+    radius = float(np.linalg.norm(both - center, axis=1).max())
+    columns, errors = [], []
+    for label, result in results.items():
+        lines, size_error = setup_metrics(result, truth)
+        errors.append(size_error)
+        columns.append((label, [render(result.observed, PANEL, 20, az, center, radius) for az in (-60, 120)], lines))
+    uncalibrated, calibrated_error = errors
+    takeaway = (f"Uncalibrated, the mesh's size was off by {uncalibrated:.0%} on average; calibrated, by {calibrated_error:.0%}: "
+                f"{uncalibrated / calibrated_error:.0f}x the error without calibration.")
+    comparison_figure(OUT / "calibration_before_after.svg", f"Real cylinder, {len(views)} views: uncalibrated vs. calibrated camera",
+                      columns, takeaway,
+                      "Observed surfaces (what the camera measured). Same captures, alignment and fusion; only the camera mount differs "
+                      "(21mm / 2.2deg apart). Uncalibrated is the mount entered by hand in the Viam app.")
+    print("wrote", OUT / "calibration_before_after.svg")
 
 
 def alignment_figure(old_session: Session) -> None:
@@ -118,8 +148,12 @@ def main() -> None:
     parser.add_argument("--old-synthetic", default="data/demo-20261026-130458", help="a demo built with the first alignment approach")
     parser.add_argument("--latest", default="data/20261028-093620", help="the scans in README section 3.1 (block 0, cylinder 1)")
     parser.add_argument("--only-latest", action="store_true", help="only the figures of --latest (no reconstruction runs)")
+    parser.add_argument("--only-calibration", action="store_true", help="only the uncalibrated vs. calibrated figure")
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
+    if args.only_calibration:
+        calibration_figure(Session(ROOT / args.real), args.real_object)
+        return
     latest = Session(ROOT / args.latest)
     observed_vs_closed_figure(latest, 0, "observed_vs_closed_block", "Orange block, 34 views: observed.obj vs. mesh.obj")
     observed_vs_closed_figure(latest, 1, "observed_vs_closed_cylinder", "Green cylinder, 34 views: observed.obj vs. mesh.obj")

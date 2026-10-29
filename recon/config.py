@@ -57,10 +57,15 @@ class WorkspaceConfig:
     # table's edge, power strips and things in gaps between tables aren't; two
     # objects closer than clear_margin would reject each other. Whether a target
     # can be scanned all around is up to the view planner.
-    # 60mm and 90% are judgment, checked on the armfarm14 table (they keep the blocks
-    # and reject the power strip and cords).
+    # min_table_support is the share of the ring the camera saw; at most max_unseen_share
+    # of it may be unseen (the floor past the table's edge is out of range, so things at
+    # the edge show up as mostly unseen). Checked on the armfarm14 surveys: the blocks
+    # (98-100% of the seen ring bare, 0-3% unseen) and a 200mm pumpkin (97%, 11% unseen,
+    # its own shadow) pass; the power strip (72-91%, 17-57% unseen) and the cables at the
+    # table's edge (31-37% unseen) don't. 60mm, 90% and 25% are judgment within those.
     clear_margin: float = 60.0
     min_table_support: float = 0.9
+    max_unseen_share: float = 0.25
     # Points higher than this above the table are ignored (taller than any object we scan).
     max_object_height: float = 500.0
     # Clusters with fewer points are noise (at 2mm voxels, 100 points is about 4cm² of surface).
@@ -107,6 +112,14 @@ class ViewConfig:
     # The camera aims this fraction of the way up the object (below the middle, so
     # low views also see the wall's base; judgment).
     aim_height_fraction: float = 0.4
+    # No view puts the camera lower than this above the table (mm). A second guard
+    # besides the motion planner's table slab, which only knows the arm's collision
+    # model. Judgment: today's lowest ring (25deg) keeps the camera above about 130mm
+    # even for small objects, so this only stops future low rings near the table.
+    min_camera_height: float = 80.0
+    # The extra ring `scan.py --low-ring` adds, for objects whose lower half curves in
+    # (a sphere, a pumpkin). min_camera_height still applies to every view in it.
+    low_ring_deg: float = 15.0
 
 
 @dataclass
