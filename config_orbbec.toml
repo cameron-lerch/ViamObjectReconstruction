@@ -18,9 +18,9 @@ motion = "builtin"
 # Its own calibration: calibration.py writes this file (never share armfarm14's).
 camera_mount_file = "calibration/orbbec_camera_mount.json"
 touch_off_file = ""
-# SET: this arm's ready pose (joint angles, degrees), camera about 300mm over the mat,
-# looking down. Empty: the start-up step only reports the joints and moves nothing.
-ready_joints_deg = []
+# SET: this arm's ready pose: the camera's position (world, mm), looking straight down,
+# about 300mm over the mat. Empty: runs start from wherever the arm is.
+ready_camera_mm = []
 
 [workspace]
 # SET: the table region searched for objects on this cell, clear of its walls.

@@ -1,57 +1,47 @@
-''' Starting a run: step to the ready pose one joint group at a time, each step confirmed. '''
+''' Starting a run: one planned move to the ready pose, no questions asked. '''
 
 import asyncio
 
-import pytest
+import numpy as np
 
 from recon.config import Config
-from recon.robot import MoveDeclined, Robot
+from recon.robot import Robot
+from recon.transforms import look_at
 
 
-class FakeArm:
-    def __init__(self, joints):
-        self.joints = list(joints)
-        self.moves = []
-
-    async def get_joint_positions(self):
-        return type("Joints", (), {"values": list(self.joints)})()
-
-    async def get_end_position(self):
-        from viam.proto.common import Pose
-        return Pose(x=300, y=-400, z=400, o_z=-1)
-
-    async def move_to_joint_positions(self, positions):
-        self.moves.append([round(v) for v in positions.values])
-        self.joints = list(positions.values)
-
-
-def robot_at(joints):
+def robot_with_camera_at(T_camera):
     robot = Robot.__new__(Robot)
-    robot.config, robot.live, robot.arm = Config(), None, FakeArm(joints)
+    robot.config, robot.live, robot.moves = Config(), None, []
 
-    async def nothing():
-        return None
-    robot.wait_until_still = nothing
-    robot.checked_camera_pose = nothing
+    async def camera_pose():
+        return T_camera
+
+    async def plan_best_roll(frame, pose_for_roll, world_state=None):
+        return 0.0, pose_for_roll(0.0), [0.0] * 6
+
+    async def move(frame, pose, world_state=None, linear=False):
+        robot.moves.append((frame, pose))
+    robot.checked_camera_pose, robot.plan_best_roll, robot.move = camera_pose, plan_best_roll, move
     return robot
 
 
-def test_steps_forearm_then_wrist_then_shoulder_elbow_then_base(monkeypatch):
-    monkeypatch.setattr("builtins.input", lambda prompt: "")
-    robot = robot_at([0, 0, -121, 290, -103, 42])  # the free-moved pose of 2026-10-29
+def test_moves_to_the_ready_pose_looking_down(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda prompt: (_ for _ in ()).throw(AssertionError("asked the operator")))
+    robot = robot_with_camera_at(look_at([300, -200, 500], [400, -300, 0]))
     asyncio.run(robot.go_ready())
-    assert robot.arm.moves == [[0, 0, -121, 0, -103, 42], [0, 0, -121, 0, -40, -39],
-                               [0, -37, -76, 0, -40, -39], [-41, -37, -76, 0, -40, -39]]
+    (frame, pose), = robot.moves
+    assert frame == robot.config.machine.camera
+    np.testing.assert_allclose(pose[:3, 3], robot.config.machine.ready_camera_mm)
+    np.testing.assert_allclose(pose[:3, 2], [0, 0, -1], atol=1e-9)
 
 
-def test_nothing_moves_when_already_ready_and_n_stops(monkeypatch):
-    monkeypatch.setattr("builtins.input", lambda prompt: "")
-    robot = robot_at([-40, -38, -77, 1, -40, -38])
+def test_nothing_moves_when_already_ready_or_no_ready_pose():
+    ready = Config().machine.ready_camera_mm
+    robot = robot_with_camera_at(look_at(np.add(ready, [3, -4, 2]), np.add(ready, [3, -4, -98])))
     asyncio.run(robot.go_ready())
-    assert robot.arm.moves == []
+    assert robot.moves == []
 
-    monkeypatch.setattr("builtins.input", lambda prompt: "n")
-    robot = robot_at([0, 0, -121, 290, -103, 42])
-    with pytest.raises(MoveDeclined):
-        asyncio.run(robot.go_ready())
-    assert robot.arm.moves == []
+    robot = robot_with_camera_at(look_at([300, -200, 500], [400, -300, 0]))
+    robot.config.machine.ready_camera_mm = []
+    asyncio.run(robot.go_ready())
+    assert robot.moves == []

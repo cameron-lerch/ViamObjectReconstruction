@@ -17,6 +17,13 @@ log = logging.getLogger(__name__)
 # An object's top is the 98th percentile of its points' heights, not the highest:
 # flying pixels and noise float above real tops (judgment, not tuned).
 TOP_PERCENTILE = 98
+# An object whose middle is past min_base_distance keeps its points up to this much
+# closer to the base: a 150mm pumpkin 380mm out reached 305mm, and cutting it at 350mm
+# left a narrow, off-center box whose cut-off part counted as 'not bare table' around it.
+BASE_REACH = 100.0
+# A box ignores this share of an object's points, the farthest from its middle, so a
+# few stray points can't stretch or turn it (they stretched a pumpkin's 150mm to 165-207mm).
+BOX_TRIM = 0.02
 
 
 @dataclass
@@ -97,10 +104,11 @@ class DetectedObject:
                 f"{length:.0f} x {width:.0f} x {height:.0f}mm, yaw {self.yaw_deg:.0f}deg")
 
 
-def in_workspace(points: np.ndarray, workspace: WorkspaceConfig) -> np.ndarray:
+def in_workspace(points: np.ndarray, workspace: WorkspaceConfig, reach: float = 0.0) -> np.ndarray:
+    ''' Points in the table region, at least min_base_distance - `reach` from the arm's base. '''
     (x0, x1), (y0, y1) = workspace.x_range, workspace.y_range
     inside = (points[:, 0] >= x0) & (points[:, 0] <= x1) & (points[:, 1] >= y0) & (points[:, 1] <= y1)
-    return inside & (np.hypot(points[:, 0], points[:, 1]) >= workspace.min_base_distance)
+    return inside & (np.hypot(points[:, 0], points[:, 1]) >= workspace.min_base_distance - reach)
 
 
 def fit_table_plane(points: np.ndarray, workspace: WorkspaceConfig) -> TablePlane:
@@ -145,6 +153,13 @@ def min_area_rectangle(xy: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
     return center, extents, yaw
 
 
+def object_box(xy: np.ndarray, trim: float = BOX_TRIM) -> tuple[np.ndarray, np.ndarray, float]:
+    ''' min_area_rectangle without the `trim` share of points farthest from the middle. '''
+    distance = np.linalg.norm(xy - np.median(xy, axis=0), axis=1)
+    inner = xy[distance <= np.quantile(distance, 1.0 - trim)]
+    return min_area_rectangle(inner if len(inner) >= 3 else xy)
+
+
 def merge_fragments(clusters: list[np.ndarray]) -> list[np.ndarray]:
     ''' Join clusters whose footprints overlap: one object split by shadows or missing depth. '''
     clusters = [c for c in clusters if len(c) >= 3]
@@ -169,7 +184,7 @@ def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceCo
     ''' Scan targets standing on the table. Anything else standing on it (too big, too
     flat, crowded) is appended to `skipped`: not worth scanning, but still an obstacle. '''
     heights = plane.height(points)
-    keep = in_workspace(points, workspace) & (heights > workspace.min_object_height) & (heights < workspace.max_object_height)
+    keep = in_workspace(points, workspace, BASE_REACH) & (heights > workspace.min_object_height) & (heights < workspace.max_object_height)
     cloud = to_cloud(points[keep])
     if colors is not None:
         cloud.colors = o3d.utility.Vector3dVector(colors[keep])
@@ -184,7 +199,9 @@ def detect_objects(points: np.ndarray, plane: TablePlane, workspace: WorkspaceCo
     for cluster in merge_fragments([candidates[labels == label] for label in range(labels.max() + 1)]):
         if len(cluster) < workspace.min_object_points:
             continue
-        center_xy, extents, yaw = min_area_rectangle(cluster[:, :2])
+        center_xy, extents, yaw = object_box(cluster[:, :2])
+        if np.hypot(*center_xy) < workspace.min_base_distance:
+            continue  # the arm and the cables around its base
         bottom = plane.z_at(*center_xy)
         top = float(np.percentile(cluster[:, 2], TOP_PERCENTILE))
         color = None

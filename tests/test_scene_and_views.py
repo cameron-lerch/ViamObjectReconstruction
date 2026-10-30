@@ -6,7 +6,8 @@ from recon import synthetic
 from recon.config import Config, load_config
 from recon.relocate import grasp_options
 from recon.rgbd import back_project
-from recon.scene import DetectedObject, detect_objects, fit_table_plane, merge_fragments, merge_views, min_area_rectangle
+from recon.scene import (DetectedObject, TablePlane, detect_objects, fit_table_plane, merge_fragments, merge_views,
+                         min_area_rectangle, object_box)
 from recon.transforms import look_at
 from recon.views import aim_point, coverage, generate_candidates, order_for_travel
 
@@ -29,6 +30,36 @@ def test_min_area_rectangle_recovers_rotated_box():
     np.testing.assert_allclose(center, [100, 50], atol=1e-9)
     np.testing.assert_allclose(extents, [70, 40], atol=1e-9)
     assert yaw == pytest.approx(30)
+
+
+def test_box_ignores_a_few_stray_points():
+    grid = np.stack(np.meshgrid(np.arange(0, 100.0, 2), np.arange(0, 60.0, 2)), -1).reshape(-1, 2)
+    strays = np.array([[160.0, 30], [150, -40], [-50, 90]])  # 3 of 1503 points
+    center, extents, yaw = object_box(np.vstack([grid, strays]))
+    np.testing.assert_allclose(extents, [98, 58], atol=3)
+    np.testing.assert_allclose(center, [49, 29], atol=2)
+    assert yaw == pytest.approx(0, abs=2)
+
+
+def test_object_reaching_toward_the_base_is_found_whole():
+    # A 150mm-wide object 380mm from the base reaches 305mm, inside min_base_distance
+    # (350mm): it keeps that side. A block whose middle is 280mm out is still ignored.
+    config = Config().workspace
+    config.x_range, config.y_range, config.min_base_distance = [-350, 700], [-650, 350], 350.0  # armfarm14
+    xy = np.stack(np.meshgrid(np.arange(-300, 300.0, 3), np.arange(-650, -150.0, 3)), -1).reshape(-1, 2)
+    under_pumpkin = np.hypot(xy[:, 0], xy[:, 1] + 380) < 75
+    under_block = (np.abs(xy[:, 0]) < 20) & (np.abs(xy[:, 1] + 280) < 20)
+    table = xy[~under_pumpkin & ~under_block]
+    pumpkin, block = xy[under_pumpkin], xy[under_block]
+    points = np.vstack([np.column_stack([table, np.zeros(len(table))]),
+                        np.column_stack([pumpkin, np.full(len(pumpkin), 150.0)]),
+                        np.column_stack([block, np.full(len(block), 60.0)])])
+    skipped = []
+    found = detect_objects(points, TablePlane(np.array([0.0, 0, 1]), 0.0), config, skipped=skipped)
+    assert len(found) == 1 and not skipped
+    np.testing.assert_allclose(found[0].center[:2], [0, -380], atol=3)
+    # Whole, not cut at 350mm (about 110mm across); the outlier filter trims a flat top's rim.
+    np.testing.assert_allclose(found[0].size[:2], [150, 150], atol=15)
 
 
 def test_table_plane_is_found(survey):

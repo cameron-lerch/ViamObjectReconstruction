@@ -63,7 +63,7 @@ def object_list(text: str) -> list[int]:
 async def with_robot(config: Config, steps, confirm_moves: bool = False, confirm_above: float | None = None,
                      go_ready: bool = False) -> None:
     ''' Connect, check the arm's pose, run `steps(robot)`, and stop safely on any interruption.
-    With `go_ready` (any run that moves the arm), first step to the ready pose (Robot.go_ready). '''
+    With `go_ready` (any run that moves the arm), first move to the ready pose (Robot.go_ready). '''
     machine = await connect(config)
     async with machine:
         robot = Robot(machine, config)
@@ -499,10 +499,9 @@ def main() -> None:
         execute = not args.plan_only
         # About 45 views per object; each is a move (about 6s) plus its frames (about 2.6s each).
         minutes = 45 * (6 + 2.6 * config.capture.frames_per_view) / 60
-        if execute and input("The arm will move to survey the table, then scan each object you choose "
-                             f"(about {minutes:.0f} minutes each; Ctrl+C, the live viewer's Stop, or the e-stop stops it). "
-                             "Start? [y/N] ").strip().lower() not in ("y", "yes"):
-            return
+        if execute:
+            log.info("The arm moves to the ready pose and surveys the table, then scans each object you choose "
+                     "(about %.0f minutes each; Ctrl+C, the live viewer's Stop, or the e-stop stops it)", minutes)
         asyncio.run(with_robot(config, lambda robot: scan_everything(robot, config, execute, args.max_views, args.truth_file,
                                                                      args.resume),
                                args.confirm_moves, args.confirm_above, go_ready=execute))

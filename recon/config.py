@@ -34,13 +34,11 @@ class MachineConfig:
     # 20mm all round for not knowing exactly where the lens sits in it; its center is
     # this far along the viewing direction from the lens (behind it). The bracket box
     # (this wide and tall) runs from the arm's end flange to the camera.
-    # The ready pose (joint angles, degrees): camera about 320mm over the calibration mat,
-    # looking straight down (the head-on board view of 2026-10-28/29). Every run that moves
-    # the arm starts by stepping here from wherever the arm is, one joint group at a time,
-    # each step confirmed (see Robot.go_ready); a joint within ready_tolerance_deg counts as there.
-    # These are armfarm14's joints: on another arm, set its own (empty: no ready-pose step).
-    ready_joints_deg: list[float] = field(default_factory=lambda: [-41.0, -37.0, -76.0, 0.0, -40.0, -39.0])
-    ready_tolerance_deg: float = 5.0
+    # The ready pose: the camera at this point (world, mm), looking straight down; on
+    # armfarm14, about 322mm over the calibration mat, where its head-on view is taken.
+    # Every run that moves the arm starts with one planned move here (Robot.go_ready).
+    # On another arm, set its own (empty: start from wherever the arm is).
+    ready_camera_mm: list[float] = field(default_factory=lambda: [505.0, -400.0, 322.0])
     camera_body_mm: list[float] = field(default_factory=lambda: [130.0, 45.0, 45.0])
     camera_body_offset_mm: float = -12.5
     camera_bracket_mm: float = 40.0
@@ -58,7 +56,8 @@ class WorkspaceConfig:
     survey_height: float = 600.0
     survey_spacing: float = 340.0
     # Points within this horizontal distance of the arm's base are the arm itself (and,
-    # on some cells, the cables around it); nothing that close is a scan target.
+    # on some cells, the cables around it); nothing whose middle is that close is a scan
+    # target. An object farther out keeps its points up to 100mm closer (scene.BASE_REACH).
     min_base_distance: float = 200.0
     # Every plan treats the table as a slab whose top is this far ABOVE the measured
     # table (the machine's configured table can sit lower than the real one), with a

@@ -26,7 +26,6 @@ from viam.proto.common import (
     Vector3,
     WorldState,
 )
-from viam.proto.component.arm import JointPositions
 from viam.proto.service.motion import Constraints, LinearConstraint, MoveRequest
 from viam.robot.client import RobotClient
 from viam.services.motion import MotionClient
@@ -34,7 +33,7 @@ from viam.services.motion import MotionClient
 from .config import Config
 from .rgbd import Intrinsics, decode_depth, decode_depth_png, median_depth
 from .scene import DetectedObject, TablePlane
-from .transforms import make_transform, matrix_to_pose, pose_to_matrix, rotation_angle_deg
+from .transforms import look_at, make_transform, matrix_to_pose, pose_to_matrix, rotation_angle_deg
 
 log = logging.getLogger(__name__)
 
@@ -386,54 +385,24 @@ class Robot:
         return Constraints(linear_constraint=[LinearConstraint(line_tolerance_mm=2.0, orientation_tolerance_degs=2.0)])
 
     async def go_ready(self) -> None:
-        ''' Step from wherever the arm is to the ready pose (camera over the mat, looking down),
-        one joint group at a time, each step shown and confirmed by the operator.
-
-        Free-moving the arm by hand can leave it anywhere (on 2026-10-29: joint 4 at 290deg),
-        and one planned move from such a pose to a camera-down pose turned every joint at
-        once, joint 4 by 290deg, fast enough to trip the arm's own speed limit. Steps here
-        turn one group at a time, in an order that keeps the arm's shape: the forearm roll
-        (4), the wrist (5, 6), the shoulder and elbow (2, 3), then the base (1). They go
-        straight to joint angles, without the planner's collision checks, which is why
-        each one waits for the operator watching the arm.
-        '''
-        names = self.config.machine
-        ready = np.array(names.ready_joints_deg, float)
-        current = np.array((await self.arm.get_joint_positions()).values, float)
-        if len(ready) != len(current):
-            log.warning("No ready pose for this arm ([machine] ready_joints_deg has %d joints, the arm %d); "
-                        "nothing moves. Its joints now (deg): %s", len(ready), len(current),
-                        np.round(current).astype(int).tolist())
+        ''' Move the camera to the ready pose, looking straight down from `[machine]
+        ready_camera_mm` (the head-on view of the calibration mat), with one planned move
+        that avoids the table and everything the survey saw. Nothing moves when the camera
+        is already within 10mm of it, or when no ready pose is set. '''
+        ready = self.config.machine.ready_camera_mm
+        if len(ready) != 3:
+            log.info("No ready pose set ([machine] ready_camera_mm); starting from where the arm is")
             return
-        T_end = pose_to_matrix(await self.arm.get_end_position())
-        log.info("Arm joints now (deg): %s", np.round(current).astype(int).tolist())
-        log.info("  arm's end at (%.0f, %.0f, %.0f)mm, pointing (%+.2f, %+.2f, %+.2f)", *T_end[:3, 3], *T_end[:3, 2])
-        log.info("Ready pose (deg):     %s", np.round(ready).astype(int).tolist())
-        if np.all(np.abs(current - ready) <= names.ready_tolerance_deg):
-            log.info("  already at the ready pose")
+        camera = await self.checked_camera_pose()
+        if np.linalg.norm(camera[:3, 3] - ready) <= 10.0 and camera[2, 2] < -0.99:
+            log.info("Camera already at the ready pose")
             return
-        steps = [("forearm roll (joint 4)", [3]), ("wrist (joints 5, 6)", [4, 5]),
-                 ("shoulder and elbow (joints 2, 3)", [1, 2]), ("base (joint 1)", [0])]
-        for name, joints in steps:
-            if self.live:
-                await self.live.checkpoint()
-            target = current.copy()
-            target[joints] = ready[joints]
-            change = target - current
-            if np.all(np.abs(change[joints]) <= names.ready_tolerance_deg):
-                continue
-            moves = ", ".join(f"joint {j + 1} {current[j]:.0f} -> {ready[j]:.0f} ({change[j]:+.0f})" for j in joints
-                              if abs(change[j]) > names.ready_tolerance_deg)
-            print(f"\nTo the ready pose, {name}: {moves}deg")
-            print("  (straight to joint angles: no collision checks, so watch the arm)")
-            answer = await asyncio.to_thread(input, "  Press Enter to move, or type n to stop: ")
-            if answer.strip().lower().startswith("n"):
-                raise MoveDeclined(f"Ready pose: the {name} step was declined")
-            await self.arm.move_to_joint_positions(JointPositions(values=target.tolist()))
-            await self.wait_until_still()
-            current = np.array((await self.arm.get_joint_positions()).values, float)
-        await self.checked_camera_pose()
-        log.info("At the ready pose: %s", np.round(current).astype(int).tolist())
+        log.info("Moving to the ready pose: camera at (%.0f, %.0f, %.0f), looking down", *ready)
+        frame = self.config.machine.camera
+        _, pose, reason = await self.plan_best_roll(frame, lambda roll: look_at(ready, [ready[0], ready[1], ready[2] - 100], roll))
+        if pose is None:
+            raise RuntimeError(f"Can't reach the ready pose: {reason}")
+        await self.move(frame, pose)
 
     async def wait_until_still(self, timeout: float = 10.0) -> None:
         deadline = time.monotonic() + timeout
