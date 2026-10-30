@@ -258,9 +258,7 @@ async def scan_everything(robot: Robot, config: Config, execute: bool, max_views
         others = [o for o in objects if o.id != obj.id]
         if not execute and started[obj.id]:
             plan = await pipeline.plan_scan(robot, pipeline.scanned_object(session, obj.id), others, config)
-            taken = {pipeline.view_key(r["azimuth_deg"], r["elevation_deg"])
-                     for _, _, r in pipeline.captured_views(session, obj.id) if "azimuth_deg" in r}
-            left = [v for v in plan.views if pipeline.view_key(v.candidate.azimuth_deg, v.candidate.elevation_deg) not in taken]
+            left = pipeline.missing_views(plan.views, pipeline.captured_views(session, obj.id))
             log.info("Object %d: %d views captured, %d still to capture", obj.id, started[obj.id], len(left))
             continue
         if not execute:
@@ -339,7 +337,7 @@ def run_reconstruct(args, config: Config) -> None:
     objects, plane = session.load_scene()
     for obj in selected(objects, args.objects):
         if session.views_dir(obj.id).exists():
-            pipeline.reconstruct_object(session, obj.id, plane, config, refine=not args.no_refine)
+            pipeline.reconstruct_object(session, obj.id, plane, config, refine=False if args.no_refine else None)
 
 
 def compare_object(session: Session, obj, truth: dict, truth_file: str, name: str | None = None) -> dict | None:
@@ -385,7 +383,7 @@ def run_progression(args, config: Config) -> None:
         scanned = pipeline.scanned_object(session, obj.id)
         views = pipeline.apply_session_calibration(session, load_views(session.views_dir(obj.id)))
         folder = session.recon_dir(obj.id) / "progression"
-        rows = progression(views, scanned, plane, config, folder, args.counts, args.order, not args.no_refine,
+        rows = progression(views, scanned, plane, config, folder, args.counts, args.order, False if args.no_refine else None,
                            min_views=args.min_views)
         log.info("Object %d, 1 to %d views (%s order):\n%s\nMeshes and summary.csv in %s",
                  obj.id, len(views), args.order, progression_table(rows), folder)

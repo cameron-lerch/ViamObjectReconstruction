@@ -122,7 +122,7 @@ def measured_share(mesh: o3d.geometry.TriangleMesh, measured: np.ndarray) -> flo
 
 
 def progression(views: list[View], obj: DetectedObject, plane: TablePlane, config: Config, folder: Path,
-                counts: list[int] | None = None, order: str = "spread", refine: bool = True,
+                counts: list[int] | None = None, order: str = "spread", refine: bool | None = None,
                 truth: o3d.geometry.TriangleMesh | None = None, min_views: int | None = None) -> list[dict]:
     ''' `min_views` overrides the "seen by at least min(N, k) views" rule for every subset. '''
     folder = Path(folder)

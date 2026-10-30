@@ -29,10 +29,24 @@ length = 29.18
 height = 29.44
 measured = { width = [30.15, 30.17, 30.13], length = [29.09, 29.16, 29.29], height = [29.40, 29.48] }
 
+# The 3D-printed objects (calibration/printed_objects/): calipers agree with the CAD within
+# 0.15mm (2026-10-29), so these are the CAD dimensions; `cad` is the printed STL, used to map
+# the surface error everywhere (tools/compare.py). Black, glossy PLA.
+
 [printed_block]
-# 3D-printed from CAD (calibration/printed_objects/calibration_block.step); calipers agree
-# with the CAD within 0.15mm (2026-10-29), so these are the CAD dimensions. Black, glossy PLA.
 shape = "box"
 width = 40.0
 length = 40.0
 height = 60.0
+cad = "calibration/printed_objects/calibration_block/calibration_block.stl"
+
+[printed_sphere]
+shape = "sphere"
+diameter = 60.0
+cad = "calibration/printed_objects/calibration_sphere/calibration_sphere.stl"
+
+[printed_bowl]
+shape = "bowl"
+diameter = 130.0       # across the rim
+height = 65.0
+cad = "calibration/printed_objects/calibration_bowl/calibration_bowl.stl"

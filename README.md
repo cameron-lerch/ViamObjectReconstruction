@@ -382,6 +382,13 @@ The same object appears in several views. Each object is taken from the view tha
 
 **Views must agree.** A patch of bad depth can look like a small object in one view: on bare, textureless table near an image's edge, the RealSense sometimes reads a blob 30mm too close. So an object is kept only if at least half of the survey views that saw its spot saw something standing there: the highest points (95th percentile) within its outline reaching half its height. The whole outline counts, not just its middle, so a bowl passes by its rim. On armfarm14's saved surveys, every such phantom (gray, about 25-30mm, over empty table) stood in only 1 of 3-5 views, and every real object, including the black printed sphere and bowl, in at least half.
 
+**A numbered map.** Each survey also saves `survey_map.png` in its session (and shows it in the live viewer): the table from straight above, put together from the survey views (each 1.5mm cell takes its color from the view looking most directly down on it), with each scan target boxed in green and numbered as the terminal lists it, and each obstacle outlined in gray. `tools/survey_map.py data/<session>` draws one for an older session.
+
+<p align="center">
+  <img src="media/images/survey_map.png" alt="The table from above: the calibration board at the top, cables, the orange prism boxed in green as target 0, a small gray thing as target 1, and small obstacles outlined in gray" width="600">
+  <br><sub><b>REAL DATA.</b> The survey of 2026-10-29 15:55: +x up, +y left</sub>
+</p>
+
 #### Everything else is an obstacle
 
 Skipped things aren't scanned, but the arm must still go around them: the survey saves them with the session as clutter, every plan treats them as obstacles, and touch-off spots keep clear of them. Some are RealSense noise (10-20mm bumps in bare table near the edge of a survey view); as obstacles they sit below the table slab, and for the touch-off they only rule out a few spots on a large table.
@@ -544,6 +551,23 @@ ArUco isn't a library: it's a family of printed square markers, and DICT_5X5 nam
 - Intel RealSense: [tuning depth cameras for best performance](https://dev.intelrealsense.com/docs/tuning-depth-cameras-for-best-performance) (depth accuracy vs. distance, edge effects)
 - Viam's `viam:camera-calibration` module (ChArUco pose tracker and hand-eye service), suggested for comparison ([§15.4](#154-calibration-that-just-works))
 
+#### Our solver vs. Viam's camera-calibration module
+
+Viam's [camera-calibration](https://github.com/viam-labs/camera-calibration) module solves the same problem with OpenCV's closed-form hand-eye method (Tsai), from the board's pose in each image; ours fits the board corners' pixels directly (least squares over the mount and the board's pose together). `tools/compare_calibration.py` runs both on the same saved board views, Viam's through its own `solve.py`, unchanged (it needs OpenCV 4, so it runs in a separate environment; see [`recon/handeye.py`](recon/handeye.py)), along with OpenCV's other four methods.
+
+- **Simulated, with a known mount:** every method recovers it exactly from perfect views. With 0.2px of corner noise, ours lands 0.03mm from the truth, Tsai 0.53mm, the others 0.34-1.77mm: fitting the pixels uses the measurements directly, while the closed-form methods work from each view's noisy board pose.
+- **On the 6 real board runs** (12 views each): every method predicts a left-out view's corners about equally well (median 1.6-2.1px; Tsai slightly better than ours in 5 of 6 runs, by 0.1-0.2px), and Tsai's mount sits 1.7-1.9mm and 0.4-0.6° from ours, consistently.
+- **What it does to a scan:** the 34-view scans of 2026-10-28, rebuilt with each method's mount from the board run made minutes before them:
+
+| Mount from | Orange block: width, length error | Green cylinder: diameter error | Views disagree |
+|---|---|---|---|
+| Ours | +3.9, +4.0mm | +2.75mm | 0.57-0.58mm |
+| Tsai (Viam's) | +4.1, +4.3mm | +3.03mm | 0.57mm |
+| Park, Horaud | +4.0 to +4.2mm | +3.0mm | 0.56-0.58mm |
+| Andreff, Daniilidis | +3.8 to +4.3mm | +2.9 to +3.1mm | 0.56-0.57mm |
+
+Ours is slightly closer to the calipers on both objects, but by only 0.2-0.3mm: for reconstruction the two are equivalent, and the 3-4mm of extra width is not the calibration's doing. (Viam's module also chooses its own views, about 20 at random rolls; this comparison uses our 12 views for both, so it compares the solvers only. Data: `data/experiments/20261029-183837-calibration/` and `...-calibration-methods-object0/1/`.)
+
 ### 5.7 Stitching: aligning the views
 
 After calibration, views still disagree by about a millimeter (arm accuracy, calibration leftovers). Fusing them as-is would average slightly shifted copies of each surface into ripples. The alignment step solves for all the per-view corrections **Cᵢ** at once:
@@ -630,6 +654,7 @@ Every setting that changes how smooth and how accurate the final mesh is, in pip
 | Setting | Now | What it trades | How chosen |
 |---|---|---|---|
 | Edge thresholds † (`edge_mask` in `recon/rgbd.py`) | 5mm or 2% jump | Lower: drops more edge pixels (and steep surfaces) | judgment |
+| `reconstruct.max_incidence_deg` † | 90° (off) | Leave out readings where the surface is seen more steeply than this; at silhouettes, stereo depth bleeds outward | being tested |
 | `reconstruct.edge_grow` † | 2px | Wider: removes more edge fattening, loses more wall data | **real**: 32.62 → 32.22mm diameter at 2px, nothing gained beyond |
 | `reconstruct.crop_margin`, `table_clearance` | 12mm, 2.5mm | What counts as the object in each view; too tight cuts it, too loose lets the table in | judgment, plus a real crop bug ([§8.2](#82-detection)) |
 
@@ -655,6 +680,9 @@ Every setting that changes how smooth and how accurate the final mesh is, in pip
 | Setting | Now | What it trades | How chosen |
 |---|---|---|---|
 | `reconstruct.smoothing_iterations` (Taubin) | 5 | More: smoother, but edges round off; 5-15 steps gave the same roughness | **real** |
+| `reconstruct.smoothing` | taubin | `taubin` keeps the size; `laplacian` shrinks the surface a little with every step; `none` | judgment |
+| `reconstruct.align` | true | The alignment step on or off; off fuses views where the arm and mount put them ([§3.4](#34-the-two-fixes-that-mattered-most): off was closer to the calipers on one cylinder) | open question |
+| `reconstruct.closing` | flat_bottom | `flat_bottom` (flat bottom, walls from the lowest seen surface, Poisson), `poisson` (Poisson through the measured surface alone), `none` (the observed surface, open) | judgment |
 | `reconstruct.min_component_fraction` | 5% | Floating pieces smaller than this are dropped | judgment |
 
 **Closing the mesh** (`mesh.obj` only)
@@ -678,12 +706,46 @@ Every arm run (`scan.py`, `calibration.py`) starts a small web server on this co
 
 - **Mesh so far**, in 3D (drag to rotate, scroll to zoom): after each view is captured, it is fused into a TSDF of its own on the GPU (about 0.2s per view), while the arm moves on, so the scan takes no longer. It shows surface seen by 2 or more views, as the final mesh keeps, placed by the arm's poses (the final alignment still runs at the end).
 - **Point cloud**, in 3D: the latest view's points near the object, in their camera colors, or every view so far, thinned to one point per 2mm.
-- **Scan camera**: the latest capture (survey, board or scan view), as color or as the colored depth preview.
-- **Orientation**: both 3D views show the robot's world axes at the object's base (X red, Y green, Z blue, 50mm), a small gizmo in the corner that turns with the view, and an orange outline of the latest view's camera (its position and field of view). The same axes are drawn over the scan camera's image, projected through that view's pose, which also shows when a view's camera was rolled (Z pointing down means the image is upside down).
+- **Scan camera**: the latest capture (survey, board or scan view), as color, as the colored depth preview, or by **height** above the table: the table one flat light gray (within 8mm of the survey's plane), things on it from blue (low) to red (their tops), the floor dark gray. Unlike depth, a flat table stays one color from any camera angle. A fourth option, **map**, shows the survey's numbered map of the table (§5.1).
+- **Orientation**: both 3D views show the robot's world axes at the object's base (X red, Y green, Z blue, 50mm) and an orange outline of the latest view's camera (its position and field of view). The same axes are drawn over the scan camera's image, projected through that view's pose, which also shows when a view's camera was rolled (Z pointing down means the image is upside down).
 - **Monitoring camera**: an optional second camera that watches the whole cell (any Viam camera component, `[live] monitor_camera`), about one frame per second.
 - **Pause** holds the arm still before its next move; **End Scan** ends the run before the next move (after a confirmation, keeping every view captured so far); **STOP** halts the arm at once, mid-move (`arm.stop()`), with no confirmation. They act inside the one function every move goes through, so they work during the survey, calibration and scanning alike. The e-stop remains the real safety.
 
+**The preview mesh vs. the final mesh.** The preview uses the same fusion as the final mesh, but skips the slower steps around it, so it shows roughly the final shape:
+
+| Step | Live preview | Final mesh |
+|---|---|---|
+| Fusion (voxel grid, voxel size, truncation band, edge filter) | Same | Same |
+| Keeps only surface seen by 2 or more views | Same | Same |
+| Which pixels count as the object | The survey's box around it | A tighter box fitted from the scan's own views |
+| Where the table is (pixels just above it are left out) | The survey's table | Each view's own fit of the table nearby |
+| Where each view is placed | Exactly where the arm reported it | After the alignment step's small corrections (usually under 1-2mm) |
+| Removing small floating fragments, Taubin smoothing | No | Yes |
+| Closing (flat bottom, filled walls) | No: the open, measured surface | Yes: the closed `mesh.obj` |
+
+In practice the preview is the final `observed.obj`, slightly noisier. It is built one view at a time, in a fraction of a second, while the arm moves; alignment and closing need all the views, so they run once at the end.
+
 Everything stays on this computer: the scan writes a few preview files into `data/live/` (the mesh, a few MB; the points, under 3MB; two images), and the page fetches whichever changed about once a second. The server only listens on this computer, serves only those files, and is built from Python's standard library (no new dependencies); the page uses three.js from a CDN. `python tools/viewer.py data/<session>` replays a finished scan view by view, ending on its final closed mesh, with the buttons off.
+
+### 5.13 Comparing settings, methods and cameras
+
+Every choice above can be compared on saved scans, offline, with one tool: [`tools/compare.py`](tools/compare.py). It rebuilds a scan several ways (or scans of the same object from different rigs), measures every result the same way, and writes a table and a side-by-side figure to `data/experiments/<time>-<name>/`:
+
+```bash
+python tools/compare.py data/<session> --vary frames=1,5,10,50                       # frames per view (full scans)
+python tools/compare.py data/<session> --vary reconstruct.closing=flat_bottom,poisson,none
+python tools/compare.py data/<session> --vary reconstruct.align=true,false --vary reconstruct.edge_grow=0,2,4
+python tools/compare.py data/<session> --vary views=8,16,all                         # fewer views, spread out
+python tools/compare.py data/<session> --vary mount=<a.json>,<b.json>                # calibrations
+python tools/compare.py data/<realsense scan> data/<orbbec scan>                     # two rigs
+```
+
+- **What can vary:** `frames` (each view's depth rebuilt as the median of its first k raw frames, which `scan.py --full-scan` keeps; all 50 reproduce the saved depth exactly), `mount` (every view re-placed with another camera mount, from the poses as captured), `views` (a subset spread over all directions), and any setting by its name in `config.toml`. Several `--vary` give every combination.
+- **What is measured:** how far single views lie from the fused surface (views disagree), roughness, volume, the share measured, size against the calipers (`ground_truth.toml`), and, for the 3D-printed objects, the surface error against their CAD model.
+- **CAD comparison** ([`recon/cad.py`](recon/cad.py)): the printed object's STL is stood on the table where the scan found it, the scan's measured surface is fitted onto it (rigid: rotation and shift, never scale, so a scan that is too big stays too big; tried from 12 starting rotations), and every measured point's signed distance from the true surface is taken: positive outside. The figure colors the surface red where it is outside, blue inside. On the CAD itself the fit is exact, and a scan made 5% too big shows a positive bias.
+- **Two rigs:** each session records its rig's name (`[machine] rig`), which labels it. A second rig gets its own config file ([`config_orbbec.toml`](config_orbbec.toml) is a template): its own address, camera names, calibration file and ready pose; with no ready pose set, the start-up step moves nothing.
+
+`tools/compare_calibration.py` compares hand-eye calibration methods on saved board runs (§5.6).
 
 ## 6. Measured vs. Filled In
 
@@ -947,6 +1009,9 @@ python scan.py demo --progression                     # synthetic table scene: s
 | `scan.py touch-off [--execute]` | with `--execute` | Touch bare table with the closed gripper (paper test) to measure the real fingertip reach (off while no gripper is mounted) |
 | `scan.py demo [--progression]` | no | Everything on synthetic data, scored against the truth |
 | `tools/camera_height_check.py [--height 100] [--execute]` | with `--execute` | A ruler check of the camera mount: the lens straight above the calibration board at a known height, with the predicted heights of the camera's face and of its collision box |
+| `tools/compare.py data/<session> [more sessions] --vary KEY=V1,V2 [--object N] [--truth NAME]` | no | Rebuild saved scans several ways (frames per view, mount, views, any setting) or compare rigs; a table and a figure ([§5.13](#513-comparing-settings-methods-and-cameras)) |
+| `tools/compare_calibration.py [data/board-...]` | no | Our hand-eye solver against Viam's (and OpenCV's other methods) on saved board runs; saves each method's mount |
+| `tools/survey_map.py data/<session>` | no | Draw the numbered map of the table for a session surveyed before maps existed |
 | `tools/viewer.py data/<session> [--object N]` | no | Replay a finished scan in the live viewer, view by view, ending on its final closed mesh |
 | `tools/depth_previews.py data/<session>` | no | Add colored `depth_preview.jpg` files to a session saved before they existed |
 | `tools/make_figures.py`, `tools/make_tsdf_diagram.py`, `tools/make_ring_diagram.py` | no | Regenerate this README's figures, the fusion diagram and the ring diagram |
@@ -985,9 +1050,10 @@ The armfarm cells are shared and remote, so the code assumes that nobody may be 
 calibration.py           the whole calibration in one command: camera, table, gripper
 scan.py                  command line: survey, plan, scan, calibrate, calibrate-board, reconstruct, progression, demo
 config.toml              this cell's settings (address, workspace, survey grid, stations, calibration files)
+config_orbbec.toml       a template for a second rig (the Orbbec arm): fill in the lines marked SET
 ground_truth.toml        caliper measurements of the test objects
 calibration/             calibrated camera mounts (used for every move and capture)
-  printed_objects/       3D-printed reference objects: CAD (STEP), printed mesh (STL), print details
+  printed_objects/       3D-printed reference objects, one folder each: CAD (STEP), printed mesh (STL), info.toml
 recon/
   config.py              every setting, with defaults and explanations
   robot.py               everything that talks to Viam: plan-only checks, moves, previews, pose guard, capture
@@ -1005,11 +1071,19 @@ recon/
   render.py, figures.py  offscreen renders and the figures saved with each scan (and used here)
   rgbd.py, transforms.py depth decoding and filtering, view files, depth previews, pose math (Viam conventions)
   live.py                the live viewer: preview fusion, pause/stop, its local web server
+  survey_map.py          the numbered map of the table after a survey
+  experiment.py          rebuild saved scans in variants and measure them (tools/compare.py)
+  cad.py                 fit a printed object's CAD model to a scan; signed surface error
+  handeye.py             hand-eye methods compared on board runs (ours, and Viam's solver)
   session.py             data/<session>/ layout
   synthetic.py           noisy synthetic RGB-D renderer with a camera-mount error
 web/
   live.html              the live viewer's page (three.js)
 tools/
+  compare.py             compare variants of saved scans, or rigs (a table and a figure)
+  compare_calibration.py compare hand-eye calibration methods on saved board runs
+  viam_solve_batch.py    runs Viam's own hand-eye solver (needs .venv-opencv4, see recon/handeye.py)
+  survey_map.py          draw the numbered map for an older session
   viewer.py              replay a finished scan in the live viewer
   depth_previews.py      colored depth previews for older sessions
   render_mesh.py         render meshes to a PNG from the command line
@@ -1017,7 +1091,7 @@ tools/
   make_noise_figure.py   one view at a time: color image and raw points per view
   make_tsdf_diagram.py   the fusion diagram
   make_ring_diagram.py   the open-table ring diagram
-tests/                   71 tests, mostly against synthetic ground truth
+tests/                   94 tests, mostly against synthetic ground truth
 media/                   diagrams (SVG + PNG) and figures
 ```
 
@@ -1108,6 +1182,8 @@ Use a second arm to hold and turn the object while the camera arm scans it, or h
 - the object's pose tracked as it moves, either from the gripper's pose or by registering each view to the growing model.
 
 ### 15.7 A second camera: the Orbbec Astra 2
+
+**Getting started on the Orbbec arm:** fill in [`config_orbbec.toml`](config_orbbec.toml) (every line marked `SET`: address, credentials file, component and image-source names, workspace, and a ready pose for that arm), then `python calibration.py --config config_orbbec.toml --plan-only`, the same with the arm moving, and `python scan.py --config config_orbbec.toml`. Capture accepts depth in Viam's format or as a 16-bit PNG. Compare with `python tools/compare.py data/<realsense scan> data/<orbbec scan>`.
 
 The next step is to scan the same objects with an Orbbec Astra 2, which is expected to give cleaner depth, and compare it with the RealSense side by side. Several settings here were chosen for the RealSense and need choosing again, on real scans, for the Orbbec: the edge filter (thresholds and growth), the depth range, the scan distance (each camera has a minimum range), the voxel size and truncation band, and the depth correction from the board. Each is marked in [`recon/config.py`](recon/config.py). To compare the two cameras fairly, each is calibrated with the board and scans the same planned views of the same objects; then compare:
 

@@ -22,6 +22,7 @@ from .rgbd import back_project, load_view, load_views, save_frames, save_view
 from .robot import MoveDeclined, Robot
 from .scene import DetectedObject, TablePlane, clutter_around, detect_objects, fit_table_plane, merge_views, views_agree
 from .session import Session
+from .survey_map import survey_map
 from .transforms import look_at
 
 log = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ async def capture_view(robot: Robot, folder, extra: dict | None = None, frames: 
     if keep_frames and robot.last_frames:
         save_frames(Path(folder) / "frames", *robot.last_frames)
     if robot.live:
-        robot.live.captured(folder)
+        robot.live.captured(folder, robot.table_plane)
     return folder
 
 
@@ -140,8 +141,8 @@ async def survey_table(robot: Robot, session: Session, config: Config) -> list:
         if plane is None:
             try:
                 plane = fit_table_plane(points, config.workspace)
-            except RuntimeError:
-                raise RuntimeError("The first survey view shows no table; start with the camera over the table")
+            except RuntimeError as error:
+                raise RuntimeError("The first survey view shows no table; start with the camera over the table") from error
         for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             neighbor = (key[0] + di, key[1] + dj)
             if neighbor in reachable and neighbor not in visited and neighbor not in frontier:
@@ -198,6 +199,13 @@ async def survey(robot: Robot, session: Session, config: Config, execute: bool) 
     plane = planes[int(np.argmin([np.linalg.norm(camera_xy - middle) for camera_xy, _ in detections]))]
     session.save_scene(objects, plane, clutter)
     robot.set_scene(plane, clutter)
+    try:  # a picture for people: it must never stop the survey
+        picture = survey_map(session, objects, clutter, config, plane.z_at(*middle))
+        log.info("Map of the table: %s", picture)
+        if robot.live:
+            robot.live.show_map(picture)
+    except Exception as error:
+        log.warning("Couldn't draw the survey map: %s", error)
     session.update(intrinsics=(await robot.intrinsics()).__dict__, config=config.to_dict())
     log.info("Table at z=%.1fmm (tilt %.2fdeg); found %d object(s)", plane.z_at(*middle),
              np.degrees(np.arccos(plane.normal[2])), len(objects))
@@ -338,6 +346,12 @@ def view_key(azimuth_deg: float, elevation_deg: float) -> tuple[int, int]:
     return round(float(azimuth_deg)) % 360, round(float(elevation_deg))
 
 
+def missing_views(planned: list, done: list[tuple[int, Path, dict]]) -> list:
+    ''' The planned views not yet captured (matched by angle around the object and ring). '''
+    taken = {view_key(r["azimuth_deg"], r["elevation_deg"]) for _, _, r in done if "azimuth_deg" in r}
+    return [v for v in planned if view_key(v.candidate.azimuth_deg, v.candidate.elevation_deg) not in taken]
+
+
 def object_position(view, obj: DetectedObject, plane: TablePlane, config: Config) -> tuple[np.ndarray, float] | None:
     ''' The object's center (x, y) and top height (95th percentile above the table) in one view. '''
     points, _, _ = back_project(view, 2, config.camera.min_depth, config.camera.max_depth)
@@ -409,8 +423,7 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
         log.info("  capturing %d of %d planned views, spread over all directions", len(views), len(plan.views))
     first = 0
     if done:
-        taken = {view_key(r["azimuth_deg"], r["elevation_deg"]) for _, _, r in done if "azimuth_deg" in r}
-        views = [v for v in views if view_key(v.candidate.azimuth_deg, v.candidate.elevation_deg) not in taken]
+        views = missing_views(views, done)
         first = max(index for index, _, _ in done) + 1
         log.info("  resuming: %d view(s) already captured, %d still to capture", len(done), len(views))
     if robot.live:
@@ -482,7 +495,7 @@ def apply_session_calibration(session: Session, views: list) -> list:
     return apply_mount(views, original, calibrated)
 
 
-def reconstruct_object(session: Session, object_id: int, plane: TablePlane, config: Config, refine: bool = True):
+def reconstruct_object(session: Session, object_id: int, plane: TablePlane, config: Config, refine: bool | None = None):
     obj = scanned_object(session, object_id)
     views = apply_session_calibration(session, load_views(session.views_dir(object_id)))
     log.info("Reconstructing object %d from %d views", object_id, len(views))
@@ -495,7 +508,7 @@ def reconstruct_object(session: Session, object_id: int, plane: TablePlane, conf
 
 
 def progression_snapshot(session: Session, object_id: int, plane: TablePlane, config: Config,
-                         refine: bool = True) -> Path:
+                         refine: bool | None = None) -> Path:
     ''' Meshes from 1, 2, 4, ... all views (spread out) and a figure of them, saved with
     the object's results: object_NN/progression.svg (and .png). '''
     obj = scanned_object(session, object_id)
@@ -511,7 +524,7 @@ def progression_snapshot(session: Session, object_id: int, plane: TablePlane, co
     return svg
 
 
-def finish_object(session: Session, object_id: int, plane: TablePlane, config: Config, refine: bool = True) -> None:
+def finish_object(session: Session, object_id: int, plane: TablePlane, config: Config, refine: bool | None = None) -> None:
     ''' Everything offline after an object's views are captured: its mesh, then the
     progression figure. '''
     reconstruct_object(session, object_id, plane, config, refine)

@@ -62,11 +62,6 @@ class SyntheticScene:
         color = np.clip(base * shade[..., None] * 255 + rng.normal(0, 3, base.shape), 0, 255).astype(np.uint8)
         return color, np.clip(depth, 0, 65535).round().astype(np.uint16)
 
-    def surface_points(self, object_index: int, count: int = 20000) -> np.ndarray:
-        ''' Ground-truth samples on one object's surface, excluding the face resting on the table. '''
-        samples = np.asarray(self.objects[object_index].mesh.sample_points_uniformly(count).points)
-        return samples[samples[:, 2] > TABLE_Z + 1.0]
-
 
 def _add_flying_pixels(depth: np.ndarray, rng: np.random.Generator, jump: float = 15.0) -> np.ndarray:
     ''' At depth edges, some pixels land somewhere between the near and far surface. '''

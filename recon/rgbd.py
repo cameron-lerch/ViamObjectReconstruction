@@ -36,9 +36,6 @@ class Intrinsics:
     def matrix(self) -> np.ndarray:
         return np.array([[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1]])
 
-    def to_o3d(self) -> o3d.camera.PinholeCameraIntrinsic:
-        return o3d.camera.PinholeCameraIntrinsic(self.width, self.height, self.fx, self.fy, self.cx, self.cy)
-
     @classmethod
     def from_viam(cls, params) -> "Intrinsics":
         return cls(
@@ -71,6 +68,16 @@ def decode_depth(data: bytes) -> np.ndarray:
     return np.frombuffer(data, ">u2", offset=24, count=width * height).reshape(height, width).astype(np.uint16)
 
 
+def decode_depth_png(data: bytes) -> np.ndarray:
+    ''' A depth image sent as a 16-bit PNG (millimeters), as some camera modules do. '''
+    import cv2
+
+    depth = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+    if depth is None or depth.dtype != np.uint16 or depth.ndim != 2:
+        raise ValueError("Depth image is not a single-channel 16-bit PNG")
+    return depth
+
+
 def median_depth(frames: list[np.ndarray], min_valid_fraction: float = 0.5) -> np.ndarray:
     ''' Per-pixel median over valid readings; pixels valid in too few frames become 0. '''
     stack = np.stack(frames).astype(np.float32)
@@ -81,6 +88,29 @@ def median_depth(frames: list[np.ndarray], min_valid_fraction: float = 0.5) -> n
         result = np.nanmedian(stack, axis=0)
     result[valid.mean(axis=0) < min_valid_fraction] = 0
     return np.nan_to_num(result).round().astype(np.uint16)
+
+
+def incidence_deg(depth: np.ndarray, intrinsics: Intrinsics, step: int = 2) -> np.ndarray:
+    ''' For each pixel, the angle (deg) between the surface's normal and the line of sight:
+    0 seen head-on, near 90 seen edge-on. The normal comes from the depth image, from the
+    points `step` pixels to either side; pixels without a reading (or a neighbor) get 90. '''
+    v, u = np.mgrid[0:depth.shape[0], 0:depth.shape[1]]
+    z = depth.astype(np.float64)
+    points = np.stack([(u - intrinsics.cx) / intrinsics.fx * z, (v - intrinsics.cy) / intrinsics.fy * z, z], axis=-1)
+    across = np.zeros_like(points)
+    down = np.zeros_like(points)
+    across[:, step:-step] = points[:, 2 * step:] - points[:, :-2 * step]
+    down[step:-step] = points[2 * step:] - points[:-2 * step]
+    normal = np.cross(across, down)
+    length = np.linalg.norm(normal, axis=-1)
+    ray = points / np.maximum(np.linalg.norm(points, axis=-1, keepdims=True), 1e-9)
+    cosine = np.abs(np.sum(normal * ray, axis=-1)) / np.maximum(length, 1e-9)
+    angle = np.degrees(np.arccos(np.clip(cosine, 0.0, 1.0)))
+    valid = (z > 0) & (length > 0)
+    for shift in (-step, step):  # a neighbor without a reading spoils the normal
+        valid &= np.roll(z, shift, axis=0) > 0
+        valid &= np.roll(z, shift, axis=1) > 0
+    return np.where(valid, angle, 90.0)
 
 
 def edge_mask(depth: np.ndarray, relative_jump: float = 0.02, min_jump: float = 5.0, grow: int = 0) -> np.ndarray:
@@ -175,6 +205,32 @@ def depth_preview(depth: np.ndarray) -> np.ndarray:
     return colored
 
 
+def height_preview(view: "View", plane) -> np.ndarray:
+    ''' The depth image colored by height above the table, for looking at: the table one
+    flat light gray (within 8mm of it: the survey's plane is fitted in one place, and the
+    real table wanders a few mm from it), things on it from blue (low) to red (their tops,
+    the 98th percentile of what stands up), the floor and anything well below the table
+    dark gray, no reading black. Unlike the depth preview, a flat table stays one color
+    whatever the camera's angle. `plane` is the measured table (scene.TablePlane). '''
+    import cv2
+
+    _, _, rays = pixel_rays(view.intrinsics)
+    depth = view.depth.astype(np.float64)
+    camera_points = rays * depth[..., None]
+    points = camera_points @ view.T_world_cam[:3, :3].T + view.T_world_cam[:3, 3]
+    height = plane.height(points.reshape(-1, 3)).reshape(depth.shape)
+    valid = depth > 0
+    band = 8.0
+    standing = valid & (height > band)
+    top = max(30.0, float(np.percentile(height[standing], 98))) if standing.any() else 30.0
+    level = (np.clip((height - band) / (top - band), 0, 1) * 255).astype(np.uint8)
+    image = np.ascontiguousarray(cv2.applyColorMap(level, cv2.COLORMAP_TURBO)[..., ::-1])
+    image[valid & (np.abs(height) <= band)] = (215, 220, 226)
+    image[valid & (height < -band)] = (70, 74, 80)
+    image[~valid] = 0
+    return image
+
+
 def save_frames(folder: Path, colors: list[bytes], depths: list[np.ndarray], color_ext: str = "jpg") -> None:
     ''' Every raw frame of a view, as captured: color_NNN.<ext> (the camera's own
     encoding) and depth_NNN.png (16-bit millimeters). '''
@@ -186,15 +242,27 @@ def save_frames(folder: Path, colors: list[bytes], depths: list[np.ndarray], col
         o3d.io.write_image(str(folder / f"depth_{index:03d}.png"), o3d.geometry.Image(np.ascontiguousarray(depth.astype(np.uint16))))
 
 
-def load_view(folder: Path) -> View:
+def load_view(folder: Path, frames: int | None = None) -> View:
+    ''' A saved view. With `frames` (a full scan's raw frames, in folder/frames/), the depth
+    is rebuilt as the median of the first `frames` of them, exactly as a capture of that
+    many frames would have made it, instead of the saved median of all of them. '''
     folder = Path(folder)
     record = json.loads((folder / "view.json").read_text())
     color_path = next(folder.glob("color.*"))
     color = np.asarray(o3d.io.read_image(str(color_path)))[..., :3]
-    depth = np.asarray(o3d.io.read_image(str(folder / "depth.png"))).astype(np.uint16)
+    if frames is None:
+        depth = np.asarray(o3d.io.read_image(str(folder / "depth.png"))).astype(np.uint16)
+    else:
+        paths = sorted((folder / "frames").glob("depth_*.png"))
+        if len(paths) < frames:
+            raise ValueError(f"{folder} has {len(paths)} raw depth frames, fewer than {frames} "
+                             "(raw frames are only saved by scan.py --full-scan)")
+        depth = median_depth([np.asarray(o3d.io.read_image(str(p))).astype(np.uint16) for p in paths[:frames]])
     meta = {k: v for k, v in record.items() if k not in ("T_world_cam", "intrinsics")}
+    if frames is not None:
+        meta["frames_used"] = frames
     return View(color, depth, np.array(record["T_world_cam"]), Intrinsics(**record["intrinsics"]), meta, folder.name)
 
 
-def load_views(folder: Path) -> list[View]:
-    return [load_view(path.parent) for path in sorted(Path(folder).glob("*/view.json"))]
+def load_views(folder: Path, frames: int | None = None) -> list[View]:
+    return [load_view(path.parent, frames) for path in sorted(Path(folder).glob("*/view.json"))]

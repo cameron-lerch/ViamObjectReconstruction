@@ -22,7 +22,7 @@ def load_truth(path: Path) -> dict:
 
 
 def measure(mesh: o3d.geometry.TriangleMesh, shape: str, table_z: float | None = None) -> dict:
-    ''' Height, plus width and length (box) or diameter (cylinder), of an upright object.
+    ''' Height, plus width and length (box) or diameter (cylinder, sphere, bowl rim), of an upright object.
 
     The mesh's lowest point is taken as the table (closed meshes have a flat bottom
     there), unless `table_z` gives it (for an observed mesh, which stops above the table).
@@ -35,6 +35,24 @@ def measure(mesh: o3d.geometry.TriangleMesh, shape: str, table_z: float | None =
     height = float(top - bottom)
     band = points[(points[:, 2] > bottom + 0.25 * height) & (points[:, 2] < bottom + 0.75 * height)]
     result = {"height": height}
+    if shape == "sphere":
+        # A sphere touching the table: fit to the points above its bottom 15% (the bottom
+        # is never seen, and the closed mesh's flat base there isn't the sphere).
+        upper = points[points[:, 2] > bottom + 0.15 * height]
+        fit = least_squares(lambda c: np.linalg.norm(upper - c[:3], axis=1) - c[3],
+                            [*upper.mean(axis=0), height / 2], loss="soft_l1", f_scale=0.5)
+        gaps = np.linalg.norm(upper - fit.x[:3], axis=1) - fit.x[3]
+        return result | {"diameter": float(2 * fit.x[3]), "fit_mm": float(np.median(np.abs(gaps)))}
+    if shape == "bowl":
+        # Across the rim: the center from a circle through the top 5% of the bowl.
+        rim = points[points[:, 2] > top - 0.05 * height]
+        fit = least_squares(lambda c: np.hypot(rim[:, 0] - c[0], rim[:, 1] - c[1]) - c[2],
+                            [*rim[:, :2].mean(axis=0), np.ptp(rim[:, 0]) / 2], loss="soft_l1", f_scale=0.5)
+        radii = np.hypot(rim[:, 0] - fit.x[0], rim[:, 1] - fit.x[1])
+        # The band holds the rim wall's outer and inner edges; across the rim means the outer
+        # edge, so the 98th percentile of the distance from the center (2% for stray points).
+        outer = float(np.percentile(radii, 98))
+        return result | {"diameter": 2 * outer, "fit_mm": float(np.median(np.abs(radii[radii > outer - 3] - outer)))}
     if shape == "cylinder":
         def gaps(c):
             return np.hypot(band[:, 0] - c[0], band[:, 1] - c[1]) - c[2]

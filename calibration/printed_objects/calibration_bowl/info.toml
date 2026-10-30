@@ -1,0 +1,28 @@
+# Lengths in mm. See ../README.md.
+
+name = "calibration_bowl"
+description = "Bowl, 130mm across, 65mm tall, opening up"
+
+[files]
+cad = "calibration_bowl.step"
+mesh = "calibration_bowl.stl"       # millimeters, same pose as the STEP file
+
+[placement]
+resting_face = "the bowl rim faces up; it rests on its outside bottom"
+bottom_at_z0 = true
+
+[print]
+printer = ""
+material = "PLA"
+color = "black, glossy"            # hard for the RealSense: dark absorbs, gloss reflects its infrared pattern
+# layer_height = 0.2   # unknown: fill in
+# nozzle = 0.4         # unknown: fill in
+# infill_percent = 20  # unknown: fill in
+date = "2026-10-29"
+
+[measured]
+# Calipers agree with the CAD within 0.15mm (2026-10-29).
+diameter = 130.0
+height = 65.0
+
+notes = "First scans (2026-10-29) were bumpy: black glossy plastic gives the RealSense patchy depth. A matte, light reprint (or matte primer) is planned."

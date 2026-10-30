@@ -220,7 +220,8 @@ def enclosed_volume(mesh: o3d.geometry.TriangleMesh) -> float:
 
 
 def close_with_flat_bottom(cloud: o3d.geometry.PointCloud, table: TablePlane, depth: int = 9,
-                           scale: float = 3.0, shrink: float = 1.0, base_band: float = 5.0) -> o3d.geometry.TriangleMesh:
+                           scale: float = 3.0, shrink: float = 1.0, base_band: float = 5.0,
+                           priors: bool = True) -> o3d.geometry.TriangleMesh:
     ''' Closed mesh through the fused surface points, with a flat bottom on the table.
 
     `cloud` needs outward normals (the TSDF's point cloud has them). `scale` sizes
@@ -238,7 +239,10 @@ def close_with_flat_bottom(cloud: o3d.geometry.PointCloud, table: TablePlane, de
     # Where wall meets table, mixed depth pixels flare outward; the straight-wall
     # prior replaces the lowest `base_band` mm of observed surface.
     clear = table.height(points) > base_band
-    extra, extra_normals = prior_points(points[clear], table, shrink, normals[clear])
+    if priors:
+        extra, extra_normals = prior_points(points[clear], table, shrink, normals[clear])
+    else:  # plain screened Poisson through the measured surface alone
+        extra, extra_normals = np.zeros((0, 3)), np.zeros((0, 3))
     points, normals = points[clear], normals[clear]
     samples = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.vstack([points, extra])))
     samples.normals = o3d.utility.Vector3dVector(np.vstack([normals, extra_normals]))

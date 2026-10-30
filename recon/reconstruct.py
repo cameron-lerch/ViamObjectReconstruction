@@ -25,7 +25,7 @@ from scipy.spatial.transform import Rotation
 
 from .bottom import boundary_edge_count, close_with_flat_bottom, enclosed_volume
 from .config import Config, ReconstructConfig
-from .rgbd import OUTLIER_NEIGHBORS, OUTLIER_STD, View, back_project, to_point_cloud
+from .rgbd import OUTLIER_NEIGHBORS, OUTLIER_STD, View, back_project, incidence_deg, to_point_cloud
 from .scene import TOP_PERCENTILE, DetectedObject, TablePlane, min_area_rectangle
 from .transforms import make_transform, rotation_angle_deg
 
@@ -73,8 +73,10 @@ def local_table_plane(view: View, pose: np.ndarray, obj: DetectedObject, fallbac
 
 def registration_cloud(view: View, obj: DetectedObject, config: Config) -> o3d.geometry.PointCloud:
     settings = config.reconstruct
-    points, colors, _ = back_project(view, settings.pixel_stride, config.camera.min_depth, config.camera.max_depth, edge_grow=config.reconstruct.edge_grow)
+    points, colors, pixels = back_project(view, settings.pixel_stride, config.camera.min_depth, config.camera.max_depth, edge_grow=config.reconstruct.edge_grow)
     keep = obj.contains(points, settings.context_margin)
+    if settings.align_max_incidence_deg < 90:
+        keep &= incidence_deg(view.depth, view.intrinsics)[pixels[:, 0], pixels[:, 1]] <= settings.align_max_incidence_deg
     cloud = to_point_cloud(points[keep], colors[keep]).voxel_down_sample(settings.registration_voxel)
     cloud, _ = cloud.remove_statistical_outlier(OUTLIER_NEIGHBORS, OUTLIER_STD)
     # Normals from neighbors within 4 point spacings (at most 30): smooth enough for
@@ -217,6 +219,8 @@ def integrate(grid: o3d.t.geometry.VoxelBlockGrid, view: View, pose: np.ndarray,
     trunc_voxels = settings.sdf_trunc / settings.voxel
     points, _, pixels = back_project(view, 1, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
     keep = object_mask(points, obj, plane, settings)
+    if settings.max_incidence_deg < 90:
+        keep &= incidence_deg(view.depth, view.intrinsics)[pixels[:, 0], pixels[:, 1]] <= settings.max_incidence_deg
     depth = np.zeros_like(view.depth)
     rows, cols = pixels[keep].T
     depth[rows, cols] = view.depth[rows, cols]
@@ -248,8 +252,12 @@ def clean_mesh(mesh: o3d.geometry.TriangleMesh, settings: ReconstructConfig) -> 
     small = counts < settings.min_component_fraction * counts.max()
     mesh.remove_triangles_by_mask(small[labels])
     mesh.remove_unreferenced_vertices()
-    if settings.smoothing_iterations:
+    if settings.smoothing_iterations and settings.smoothing == "taubin":
         mesh = mesh.filter_smooth_taubin(settings.smoothing_iterations)
+    elif settings.smoothing_iterations and settings.smoothing == "laplacian":
+        mesh = mesh.filter_smooth_laplacian(settings.smoothing_iterations)
+    elif settings.smoothing not in ("taubin", "laplacian", "none"):
+        raise ValueError(f"Unknown smoothing {settings.smoothing!r}: taubin, laplacian or none")
     mesh.compute_vertex_normals()
     return mesh
 
@@ -302,7 +310,8 @@ class FusedMesh:
 
 def build_mesh(views: list[View], poses: list[np.ndarray], planes: list[TablePlane], obj: DetectedObject,
                config: Config, min_views: int | None = None) -> FusedMesh:
-    ''' Fuse posed views into the observed surface, then close it with a flat bottom. '''
+    ''' Fuse posed views into the observed surface, then close it (`closing`: a flat bottom
+    with the wall prior, plain Poisson, or not at all). '''
     settings = config.reconstruct
     # Each view adds 1 to a voxel's weight, and extraction keeps weights strictly
     # above the threshold, so "seen by at least n views" is a threshold of n - 0.5.
@@ -311,9 +320,14 @@ def build_mesh(views: list[View], poses: list[np.ndarray], planes: list[TablePla
     observed = clean_mesh(grid.extract_triangle_mesh(weight).to_legacy(), settings)
     cloud = grid.extract_point_cloud(weight).to_legacy()
     table = combined_plane(planes, obj.center)
-    mesh = (close_with_flat_bottom(cloud, table, settings.poisson_depth, settings.poisson_scale,
-                                   settings.footprint_shrink, settings.base_band)
-            if settings.close_bottom else observed)
+    if settings.closing in ("flat_bottom", "poisson"):
+        mesh = close_with_flat_bottom(cloud, table, settings.poisson_depth, settings.poisson_scale,
+                                      settings.footprint_shrink, settings.base_band,
+                                      priors=settings.closing == "flat_bottom")
+    elif settings.closing == "none":
+        mesh = observed
+    else:
+        raise ValueError(f"Unknown closing {settings.closing!r}: flat_bottom, poisson or none")
     return FusedMesh(observed, mesh, cloud, table)
 
 
@@ -359,9 +373,10 @@ def refit_object(views: list[View], poses: list[np.ndarray], obj: DetectedObject
 
 
 def refined_views(views: list[View], obj: DetectedObject, plane: TablePlane, config: Config,
-                  refine: bool = True) -> tuple[DetectedObject, list[np.ndarray], list[TablePlane], dict]:
+                  refine: bool | None = None) -> tuple[DetectedObject, list[np.ndarray], list[TablePlane], dict]:
     ''' The object's box refit from the scan, camera poses after alignment, each view's
-    local table, and the alignment report. '''
+    local table, and the alignment report. `refine` (alignment) defaults to `[reconstruct] align`. '''
+    refine = config.reconstruct.align if refine is None else refine
     arm_poses = [view.T_world_cam for view in views]
     obj = refit_object(views, arm_poses, obj, plane, config)
     if refine and len(views) > 1:
@@ -375,7 +390,7 @@ def refined_views(views: list[View], obj: DetectedObject, plane: TablePlane, con
 
 
 def reconstruct(views: list[View], obj: DetectedObject, plane: TablePlane, config: Config,
-                refine: bool = True) -> Reconstruction:
+                refine: bool | None = None) -> Reconstruction:
     if not views:
         raise ValueError("No views to reconstruct from")
     survey_obj = obj

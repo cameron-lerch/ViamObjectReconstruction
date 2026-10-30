@@ -32,7 +32,7 @@ from viam.robot.client import RobotClient
 from viam.services.motion import MotionClient
 
 from .config import Config
-from .rgbd import Intrinsics, decode_depth, median_depth
+from .rgbd import Intrinsics, decode_depth, decode_depth_png, median_depth
 from .scene import DetectedObject, TablePlane
 from .transforms import make_transform, matrix_to_pose, pose_to_matrix, rotation_angle_deg
 
@@ -400,6 +400,11 @@ class Robot:
         names = self.config.machine
         ready = np.array(names.ready_joints_deg, float)
         current = np.array((await self.arm.get_joint_positions()).values, float)
+        if len(ready) != len(current):
+            log.warning("No ready pose for this arm ([machine] ready_joints_deg has %d joints, the arm %d); "
+                        "nothing moves. Its joints now (deg): %s", len(ready), len(current),
+                        np.round(current).astype(int).tolist())
+            return
         T_end = pose_to_matrix(await self.arm.get_end_position())
         log.info("Arm joints now (deg): %s", np.round(current).astype(int).tolist())
         log.info("  arm's end at (%.0f, %.0f, %.0f)mm, pointing (%+.2f, %+.2f, %+.2f)", *T_end[:3, 3], *T_end[:3, 2])
@@ -471,8 +476,10 @@ class Robot:
                 await asyncio.sleep(0.02)
                 continue
             for image in images:
-                if image.mime_type == DEPTH_MIME:
-                    depths.append(decode_depth(image.data))
+                # Depth by its source name or Viam's depth format: another camera module (the
+                # Orbbec's, say) may send depth as a 16-bit PNG instead.
+                if image.mime_type == DEPTH_MIME or (depth and getattr(image, "name", "") == names.depth_source):
+                    depths.append(decode_depth(image.data) if image.mime_type == DEPTH_MIME else decode_depth_png(image.data))
                 else:
                     if keep:
                         colors.append(image.data)

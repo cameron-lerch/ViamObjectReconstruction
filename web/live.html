@@ -81,9 +81,9 @@
   </section>
   <section>
     <h2>Scan camera <span id="cameraInfo"></span>
-      <span class="toggle"><button id="showColor" class="on">color</button><button id="showDepth">depth</button></span></h2>
+      <span class="toggle"><button id="showColor" class="on">color</button><button id="showDepth">depth</button><button id="showHeight">height</button><button id="showMap">map</button></span></h2>
     <div class="view" id="cameraView"><img id="camera" alt="The latest capture from the wrist camera" hidden><canvas class="overlay" id="cameraAxes"></canvas><div class="empty" id="cameraEmpty">No capture yet.</div></div>
-    <div class="hint">The latest capture from the RGBD camera. Depth: NEAR [red ....... blue] FAR  BLACK = no reading.</div>
+    <div class="hint">The latest capture from the RGBD camera. Depth: NEAR [red ....... blue] FAR  BLACK = no reading. </div>
   </section>
   <section>
     <h2>Monitoring camera <span id="monitorInfo"></span></h2>
@@ -179,40 +179,16 @@ function makeViewer(container) {
   const outline = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: CAMERA_COLOR }));
   outline.visible = false;
   scene.add(outline);
-  // A small orientation gizmo in the corner that turns with the view.
-  const gizmoScene = new THREE.Scene();
-  gizmoScene.add(makeAxes(1, 0.5));
-  const gizmoCamera = new THREE.OrthographicCamera(-1.7, 1.7, 1.7, -1.7, 0.1, 20);
-  gizmoCamera.up.set(0, 0, 1);
-  renderer.autoClear = false;
-  const viewer = { renderer, scene, camera, controls, axes, outline, object: null, framedFor: null, size: [1, 1] };
+  const viewer = { renderer, scene, camera, controls, axes, outline, object: null, framedFor: null };
   const resize = () => {
     const { clientWidth: w, clientHeight: h } = container;
     renderer.setSize(w, h, false);
     camera.aspect = w / Math.max(h, 1);
     camera.updateProjectionMatrix();
-    viewer.size = [w, h];
   };
   new ResizeObserver(resize).observe(container);
   resize();
-  const loop = () => {
-    controls.update();
-    const [w, h] = viewer.size;
-    renderer.setViewport(0, 0, w, h);
-    renderer.setScissorTest(false);
-    renderer.clear();
-    renderer.render(scene, camera);
-    const size = 96;
-    renderer.setViewport(8, 8, size, size);
-    renderer.setScissor(8, 8, size, size);
-    renderer.setScissorTest(true);
-    renderer.clearDepth();
-    gizmoCamera.position.copy(camera.position).sub(controls.target).setLength(5);
-    gizmoCamera.up.copy(camera.up);
-    gizmoCamera.lookAt(0, 0, 0);
-    renderer.render(gizmoScene, gizmoCamera);
-    requestAnimationFrame(loop);
-  };
+  const loop = () => { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); };
   loop();
   return viewer;
 }
@@ -241,7 +217,7 @@ const meshViewer = makeViewer($("meshView"));
 const pointsViewer = makeViewer($("pointsView"));
 const meshMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide });
 let pointsMode = "points";  // or "all_points"
-let cameraMode = "color";   // or "depth"
+let cameraMode = "color";   // or "depth", "height" or "map"
 let last = { versions: {} };
 
 function load(url) {
@@ -315,7 +291,7 @@ function drawImageAxes() {
   canvas.height = canvas.clientHeight * dpr;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (img.hidden || !status.camera || !status.axes_origin) return;
+  if (img.hidden || cameraMode === "map" || !status.camera || !status.axes_origin) return;
   const info = status.camera, T = info.T_world_cam;
   // The image is drawn "contain": scaled to fit, centered.
   const scale = Math.min(canvas.clientWidth / info.width, canvas.clientHeight / info.height);
@@ -354,8 +330,8 @@ async function poll() {
     placeAxes(status);
     if (v.mesh && v.mesh !== old.mesh) await refreshMesh(status);
     if (v.points && v.points !== old.points) await refreshPoints(status);
-    const cameraName = cameraMode === "color" ? "color" : "depth";
-    if (v[cameraName] && v[cameraName] !== old[cameraName]) refreshImage($("camera"), $("cameraEmpty"), `${cameraName}.jpg`, v[cameraName]);
+    const cameraFile = { color: "color.jpg", depth: "depth.jpg", height: "height.jpg", map: "map.png" }[cameraMode];
+    if (v[cameraMode] && v[cameraMode] !== old[cameraMode]) refreshImage($("camera"), $("cameraEmpty"), cameraFile, v[cameraMode]);
     if (v.monitor && v.monitor !== old.monitor) refreshImage($("monitor"), $("monitorEmpty"), "monitor.jpg", v.monitor);
     last = status;
     drawImageAxes();
@@ -381,15 +357,23 @@ $("halt").onclick = () => post("stop-now");
 
 function pick(on, off, apply) {
   $(on).classList.add("on");
-  $(off).classList.remove("on");
+  for (const id of [off].flat()) $(id).classList.remove("on");
   apply();
+}
+function showCamera(mode) {
+  cameraMode = mode;
+  const file = { color: "color.jpg", depth: "depth.jpg", height: "height.jpg", map: "map.png" }[mode];
+  if (last.versions[mode]) refreshImage($("camera"), $("cameraEmpty"), file, last.versions[mode]);
+  drawImageAxes();
 }
 $("meshColor").onclick = () => pick("meshColor", "meshGray", () => last.versions.mesh && refreshMesh(last));
 $("meshGray").onclick = () => pick("meshGray", "meshColor", () => last.versions.mesh && refreshMesh(last));
 $("pointsLatest").onclick = () => pick("pointsLatest", "pointsAll", () => { pointsMode = "points"; last.versions.points && refreshPoints(last); });
 $("pointsAll").onclick = () => pick("pointsAll", "pointsLatest", () => { pointsMode = "all_points"; last.versions.points && refreshPoints(last); });
-$("showColor").onclick = () => pick("showColor", "showDepth", () => { cameraMode = "color"; last.versions.color && refreshImage($("camera"), $("cameraEmpty"), "color.jpg", last.versions.color); });
-$("showDepth").onclick = () => pick("showDepth", "showColor", () => { cameraMode = "depth"; last.versions.depth && refreshImage($("camera"), $("cameraEmpty"), "depth.jpg", last.versions.depth); });
+const CAMERA_BUTTONS = { showColor: "color", showDepth: "depth", showHeight: "height", showMap: "map" };
+for (const [id, mode] of Object.entries(CAMERA_BUTTONS)) {
+  $(id).onclick = () => pick(id, Object.keys(CAMERA_BUTTONS).filter((other) => other !== id), () => showCamera(mode));
+}
 
 poll();
 </script>

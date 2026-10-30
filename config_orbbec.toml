@@ -1,0 +1,51 @@
+# Settings for the Orbbec arm cell: a TEMPLATE. Fill in every line marked SET before the
+# first run; anything left out uses the defaults in recon/config.py (armfarm14's values).
+# Use it with --config:
+#     python calibration.py --config config_orbbec.toml --plan-only
+#     python scan.py --config config_orbbec.toml --plan-only
+# Distances are mm, world frame.
+
+[machine]
+rig = "orbbec"                # saved with every session, to tell rigs apart in comparisons
+address = "SET-ME.viam.cloud" # SET: the machine's address (Viam app, CONNECT tab)
+credentials = "apikey_orbbec.json"  # SET: {"key": "...", "key_id": "..."} for this machine; kept out of git
+arm = "arm"                   # SET: component names as configured on this machine
+camera = "cam"                # SET
+color_source = "color"        # SET: the camera's get_images source names
+depth_source = "depth"        # SET
+gripper = ""
+motion = "builtin"
+# Its own calibration: calibration.py writes this file (never share armfarm14's).
+camera_mount_file = "calibration/orbbec_camera_mount.json"
+touch_off_file = ""
+# SET: this arm's ready pose (joint angles, degrees), camera about 300mm over the mat,
+# looking down. Empty: the start-up step only reports the joints and moves nothing.
+ready_joints_deg = []
+
+[workspace]
+# SET: the table region searched for objects on this cell, clear of its walls.
+x_range = [-350, 700]
+y_range = [-650, 350]
+min_base_distance = 350
+
+[views]
+standoff = 280               # Orbbec Astra 2 minimum range differs from the RealSense's: check
+elevations_deg = [15, 25, 50, 72]
+azimuth_step_deg = 30
+min_camera_height = 80
+
+[capture]
+settle_s = 0.6
+frames_per_view = 5
+
+[relocate]
+enabled = false
+
+[reconstruct]
+voxel = 1.5
+device = "auto"
+
+[live]
+enabled = true
+port = 8765
+monitor_camera = ""          # SET if this cell has a monitoring camera

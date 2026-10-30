@@ -2,7 +2,6 @@
 the object hasn't moved. '''
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 import numpy as np

@@ -39,9 +39,11 @@ def main() -> None:
 
     live = Live(config, config.resolve(config.data_dir) / "live_replay", read_only=True)
     print("Open", live.start_server())
+    if (session.root / "survey_map.png").exists():
+        live.show_map(session.root / "survey_map.png")
     live.start_object(session.root.name, obj, plane, len(folders))
     for index, folder in enumerate(folders):
-        live.captured(folder)
+        live.captured(folder, plane)
         live.view_captured(folder, index)
         time.sleep(args.delay)
     live.message("Replaying: every view fused (arm poses, no final alignment)", "done")

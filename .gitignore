@@ -1,8 +1,10 @@
 # Credentials: never commit
-apikey.json
+apikey*.json
 connect.py
 
 .venv/
+# OpenCV 4, only for running Viam's hand-eye solver (tools/viam_solve_batch.py)
+.venv-opencv4/
 __pycache__/
 .pytest_cache/
 

@@ -213,7 +213,7 @@ async def touch_off(robot: Robot, objects: list[DetectedObject], plane: TablePla
     for x, y, table_z in candidates:
         high = travel_height(table_z, expected)
         roll, pose, reason = await robot.plan_best_roll(
-            gripper, lambda r, x=x, y=y: pointing_down(x, y, high, r), robot.world_state(objects, margin))
+            gripper, lambda r, x=x, y=y, high=high: pointing_down(x, y, high, r), robot.world_state(objects, margin))
         log.info("  (%.0f, %.0f), table at z=%.1f: %s", x, y, table_z,
                  f"reachable with the fingertips {TRAVEL:.0f}mm up" if pose is not None else reason)
         if pose is not None:

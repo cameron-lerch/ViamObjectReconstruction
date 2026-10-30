@@ -2,6 +2,7 @@
 # recon/config.py, where every setting is documented. Distances are mm, world frame.
 
 [machine]
+rig = "armfarm14-realsense"    # saved with every session, to tell rigs apart in comparisons
 address = "armfarm14-main.310sld03v2.viam.cloud"
 credentials = "apikey.json"   # {"key": "...", "key_id": "..."}, kept out of git
 arm = "arm"

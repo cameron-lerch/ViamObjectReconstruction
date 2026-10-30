@@ -8,6 +8,9 @@ from pathlib import Path
 
 @dataclass
 class MachineConfig:
+    # A short name for this arm and camera, saved with every session so comparisons can
+    # tell scans from different rigs apart (e.g. "armfarm14-realsense", "orbbec-arm").
+    rig: str = "armfarm14-realsense"
     address: str = "armfarm11-main.310sld03v2.viam.cloud"
     credentials: str = "apikey.json"
     arm: str = "arm"
@@ -35,6 +38,7 @@ class MachineConfig:
     # looking straight down (the head-on board view of 2026-10-28/29). Every run that moves
     # the arm starts by stepping here from wherever the arm is, one joint group at a time,
     # each step confirmed (see Robot.go_ready); a joint within ready_tolerance_deg counts as there.
+    # These are armfarm14's joints: on another arm, set its own (empty: no ready-pose step).
     ready_joints_deg: list[float] = field(default_factory=lambda: [-41.0, -37.0, -76.0, 0.0, -40.0, -39.0])
     ready_tolerance_deg: float = 5.0
     camera_body_mm: list[float] = field(default_factory=lambda: [130.0, 45.0, 45.0])
@@ -133,8 +137,8 @@ class ViewConfig:
     aim_height_fraction: float = 0.4
     # No view puts the camera lower than this above the table (mm). A second guard
     # besides the motion planner's table slab, which only knows the arm's collision
-    # model. Judgment: today's lowest ring (25deg) keeps the camera above about 130mm
-    # even for small objects, so this only stops future low rings near the table.
+    # model. Judgment: the lowest ring (15deg) keeps the camera above about 90mm even for
+    # a 30mm block, so this only matters for small objects or lower rings.
     min_camera_height: float = 80.0
 
 
@@ -199,6 +203,11 @@ class ReconstructConfig:
     # nothing there and costs accuracy on clean data. Survey detection doesn't use it.
     # Measured on RealSense data: test again for another camera (such as the Orbbec Astra 2).
     edge_grow: int = 2
+    # Leave out depth readings where the surface is seen more steeply than this (deg
+    # between the surface and the line of sight's perpendicular; 90 = keep everything).
+    # Seen edge-on, at an object's silhouette, stereo depth is least reliable and tends
+    # to bleed outward. The tilt comes from the depth image itself (rgbd.incidence_deg).
+    max_incidence_deg: float = 90.0
     # Fusion keeps points within this margin around the object's box ...
     crop_margin: float = 12.0
     # ... and at least this far above the table.
@@ -235,15 +244,30 @@ class ReconstructConfig:
     # several times the prior, but well below the 21mm mount error a bad calibration gives).
     max_correction_mm: float = 15.0
     max_correction_deg: float = 5.0
+    # The alignment step (joint ICP with the arm-pose prior) on or off; off fuses the views
+    # where the arm and camera mount put them (README section 3.4: off made the calibrated
+    # cylinder 28.9mm wide against 32.2mm on, calipers 29.53mm).
+    align: bool = True
+    # Leave grazing readings (surface seen more steeply than this, deg) out of the alignment
+    # only; 90 = use them all. Views overlap mostly at an object's corners and edges, where one
+    # of them sees the surface edge-on and reads it too far out; matching to those pulled
+    # every view outward (2026-10-29, the 34-view block: its surface moved 1.3mm toward each
+    # camera on average, making it 1.7mm wider than with alignment off).
+    align_max_incidence_deg: float = 90.0
     # Taubin smoothing steps on the observed mesh (Taubin, unlike plain Laplacian
     # smoothing, doesn't shrink the surface). On the real cylinder 5-15 steps and
     # Poisson depth 7-9 all gave roughness 0.112-0.116mm, so the light end was kept.
     smoothing_iterations: int = 5
-    # Objects rest flat on the table, so the final mesh is closed with a flat bottom,
-    # and walls never seen are assumed to drop straight down from the outline seen
-    # from above (screened Poisson; see bottom.py). The outline is shrunk by
-    # footprint_shrink mm because edge noise pads it.
-    close_bottom: bool = True
+    # Which smoothing: "taubin" (keeps size), "laplacian" (plain averaging; shrinks the
+    # surface a little with every step) or "none".
+    smoothing: str = "taubin"
+    # How the final mesh is closed. "flat_bottom": objects rest flat on the table, so the
+    # bottom is filled flat and walls never seen drop from the lowest surface seen
+    # (screened Poisson with those priors; see bottom.py). "poisson": screened Poisson
+    # through the measured surface alone, no priors. "none": the observed surface as is
+    # (open where unseen). The outline is shrunk by footprint_shrink mm because edge
+    # noise pads it.
+    closing: str = "flat_bottom"
     # Screened Poisson: an octree of depth 9 (2^9 = 512 cells across its box) over a box
     # 3x the object's size; a tighter box left few-view surfaces open (README section 8.4).
     poisson_depth: int = 9
@@ -274,7 +298,10 @@ class LiveConfig:
     port: int = 8765
     # A Viam camera component that watches the whole cell, shown on the page ("" for none).
     monitor_camera: str = ""
-    monitor_interval_s: float = 1.0
+    # Monitoring frames per second, streamed to the page as live video. Each frame is about
+    # 26KB and arrives in about 0.06s over the cloud connection, so roughly 15-24fps is the
+    # ceiling; it shares that connection with the scan's own depth frames.
+    monitor_fps: float = 24.0
 
 
 @dataclass
