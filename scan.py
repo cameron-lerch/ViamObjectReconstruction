@@ -289,12 +289,22 @@ async def scan_everything(robot: Robot, config: Config, execute: bool, max_views
     await pipeline.go_home(robot, session, config)
     # Meshes, figures and comparisons after the arm is parked: they take a while and need no robot.
     truth = load_truth(config.resolve(truth_file))
+    live = getattr(robot, "live", None)
     for obj in scanned:
         log.info("\nBuilding object %d's meshes and figures", obj.id)
         pipeline.finish_object(session, obj.id, plane, config)
         compare_object(session, obj, truth, truth_file)
+        if live:
+            live.show_final(session.recon_dir(obj.id) / "mesh.ply")
     log.info("\nDone: %d object(s) scanned. Results in %s/object_NN/ (recon/mesh.obj, recon/observed.obj, progression.png)",
              len(scanned), session.root)
+    if live and scanned:
+        # The viewer stays open, with the final mesh, until this last prompt is answered.
+        views = sum(len(pipeline.captured_views(session, obj.id)) for obj in scanned)
+        live.complete(f"{views} views, final mesh ready")
+        await asyncio.to_thread(input, f"\nScan completed {views} views with {config.capture.frames_per_view} frames per view. "
+                                       f"\nData saved and final mesh generated in {session.root} "
+                                       "\n Press ENTER to end the program and close the webapp.")
 
 
 def report_board(result: dict, session: Session) -> None:

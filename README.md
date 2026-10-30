@@ -698,18 +698,22 @@ Every setting that changes how smooth and how accurate the final mesh is, in pip
 ### 5.12 Watching a scan live
 
 <p align="center">
-  <img src="media/images/live_viewer.png" alt="The live viewer in a browser: a status bar with Pause, End Scan and STOP; the bowl's mesh in 3D; that view's point cloud; the latest depth image, colored near-red to far-blue; and a panel for the monitoring camera" width="1000">
-  <br><sub><b>REAL DATA.</b> The printed bowl's scan (2026-10-29) replayed with <code>tools/viewer.py</code></sub>
+  <img src="media/images/live_viewer.png" alt="The viewer in a browser: the pumpkin's final mesh in color; the first view's point cloud; the RGB-D camera's height view from straight above, the pumpkin's top in red, with axes in its corner; and the monitoring panel showing the Viam logo" width="1000">
+  <br><sub><b>REAL DATA.</b> The pumpkin's scan (2026-10-30) in <code>data_viewer.py</code></sub>
 </p>
 
 Every arm run (`scan.py`, `calibration.py`) starts a small web server on this computer and prints its link, `http://localhost:8765`. The page follows the scan:
 
-- **Mesh so far**, in 3D (drag to rotate, scroll to zoom): after each view is captured, it is fused into a TSDF of its own on the GPU (about 0.2s per view), while the arm moves on, so the scan takes no longer. It shows surface seen by 2 or more views, as the final mesh keeps, placed by the arm's poses (the final alignment still runs at the end).
+- **Mesh**, in 3D (left click to rotate, right click to pan, scroll to zoom), gray or in color: after each view is captured, it is fused into a TSDF of its own on the GPU (about 0.2s per view), while the arm moves on, so the scan takes no longer. It shows surface seen by 2 or more views, as the final mesh keeps, placed by the arm's poses. **Final mesh** shows the closed `mesh.obj` once the scan is done (colored from the nearest measured surface; the closing itself has no colors).
 - **Point cloud**, in 3D: the latest view's points near the object, in their camera colors, or every view so far, thinned to one point per 2mm.
-- **Scan camera**: the latest capture (survey, board or scan view), as color, as the colored depth preview, or by **height** above the table: the table one flat light gray (within 8mm of the survey's plane), things on it from blue (low) to red (their tops), the floor dark gray. Unlike depth, a flat table stays one color from any camera angle. A fourth option, **map**, shows the survey's numbered map of the table (§5.1).
-- **Orientation**: both 3D views show the robot's world axes at the object's base (X red, Y green, Z blue, 50mm) and an orange outline of the latest view's camera (its position and field of view). The same axes are drawn over the scan camera's image, projected through that view's pose, which also shows when a view's camera was rolled (Z pointing down means the image is upside down).
-- **Monitoring camera**: an optional second camera that watches the whole cell (any Viam camera component, `[live] monitor_camera`), about one frame per second.
+- **RGB-D Camera Feed**: the latest capture (survey, board or scan view), as color, as the colored depth preview, or by **height** above the table: the table one flat light gray (within 8mm of the survey's plane), things on it from blue (low) to red (their tops), the floor dark gray. Unlike depth, a flat table stays one color from any camera angle. **Map** shows the survey's numbered map of the table (§5.1).
+- **Playback**, in each of those three panels: back, play and forward controls step through every view captured so far, about 3 seconds each, with "view k of N". Every step's mesh, points and images are kept for it (the step's preview mesh simplified to at most 60,000 triangles).
+- **Orientation**: each 3D panel has the robot's world axes (X red, Y green, Z blue) in its bottom-left corner, turning with the view, and an orange outline of the shown view's camera (its position and field of view). The camera panel's corner shows the same axes as that image sees them, which also shows when a view's camera was rolled (Z pointing down means the image is upside down).
+- **Monitoring camera**: an optional second camera that watches the whole cell (any Viam camera component, `[live] monitor_camera`), streamed as live video (MJPEG) at up to `[live] monitor_fps` (24) frames per second. Each frame is about 26KB and takes about 0.06s over the cloud connection, which it shares with the scan's own depth frames.
 - **Pause** holds the arm still before its next move; **End Scan** ends the run before the next move (after a confirmation, keeping every view captured so far); **STOP** halts the arm at once, mid-move (`arm.stop()`), with no confirmation. They act inside the one function every move goes through, so they work during the survey, calibration and scanning alike. The e-stop remains the real safety.
+- **When the scan is done**, the status turns red, "scan complete", the final mesh appears, and the viewer stays open until the terminal's last prompt ("Scan completed N views with X frames per view ... Press ENTER to end the program and close the webapp") is answered.
+
+**Watching a saved scan:** `python data_viewer.py` (the most recent scan) or `python data_viewer.py 20261030-110809` (a session folder in `data/`) shows a finished scan on the same page: every step is prepared up front, so playback can go straight to the end, the display steps through the views about every 3 seconds, and the final mesh is there from the start. Nothing talks to a robot; the arm buttons are hidden, and the monitoring panel says it isn't available for previous scans.
 
 **The preview mesh vs. the final mesh.** The preview uses the same fusion as the final mesh, but skips the slower steps around it, so it shows roughly the final shape:
 
@@ -725,7 +729,7 @@ Every arm run (`scan.py`, `calibration.py`) starts a small web server on this co
 
 In practice the preview is the final `observed.obj`, slightly noisier. It is built one view at a time, in a fraction of a second, while the arm moves; alignment and closing need all the views, so they run once at the end.
 
-Everything stays on this computer: the scan writes a few preview files into `data/live/` (the mesh, a few MB; the points, under 3MB; two images), and the page fetches whichever changed about once a second. The server only listens on this computer, serves only those files, and is built from Python's standard library (no new dependencies); the page uses three.js from a CDN. `python tools/viewer.py data/<session>` replays a finished scan view by view, ending on its final closed mesh, with the buttons off.
+Everything stays on this computer: the scan writes its preview files into `data/live/` (`data/live_replay/` for `data_viewer.py`; about 5MB per step, replaced by the next run), and the page fetches whichever changed about once a second. The server only listens on this computer, serves only those files, and is built from Python's standard library (no new dependencies); the page uses three.js from a CDN.
 
 ### 5.13 Comparing settings, methods and cameras
 
@@ -1012,7 +1016,7 @@ python scan.py demo --progression                     # synthetic table scene: s
 | `tools/compare.py data/<session> [more sessions] --vary KEY=V1,V2 [--object N] [--truth NAME]` | no | Rebuild saved scans several ways (frames per view, mount, views, any setting) or compare rigs; a table and a figure ([§5.13](#513-comparing-settings-methods-and-cameras)) |
 | `tools/compare_calibration.py [data/board-...]` | no | Our hand-eye solver against Viam's (and OpenCV's other methods) on saved board runs; saves each method's mount |
 | `tools/survey_map.py data/<session>` | no | Draw the numbered map of the table for a session surveyed before maps existed |
-| `tools/viewer.py data/<session> [--object N]` | no | Replay a finished scan in the live viewer, view by view, ending on its final closed mesh |
+| `data_viewer.py [<session>] [--object N] [--seconds 3]` | no | Watch a saved scan in the viewer, as it looked while it ran, with playback and the final mesh (default: the most recent scan) |
 | `tools/depth_previews.py data/<session>` | no | Add colored `depth_preview.jpg` files to a session saved before they existed |
 | `tools/make_figures.py`, `tools/make_tsdf_diagram.py`, `tools/make_ring_diagram.py` | no | Regenerate this README's figures, the fusion diagram and the ring diagram |
 
@@ -1048,6 +1052,7 @@ The armfarm cells are shared and remote, so the code assumes that nobody may be 
 
 ```
 calibration.py           the whole calibration in one command: camera, table, gripper
+data_viewer.py           watch a saved scan in the viewer, with playback and the final mesh
 scan.py                  command line: survey, plan, scan, calibrate, calibrate-board, reconstruct, progression, demo
 config.toml              this cell's settings (address, workspace, survey grid, stations, calibration files)
 config_orbbec.toml       a template for a second rig (the Orbbec arm): fill in the lines marked SET
@@ -1078,13 +1083,13 @@ recon/
   session.py             data/<session>/ layout
   synthetic.py           noisy synthetic RGB-D renderer with a camera-mount error
 web/
-  live.html              the live viewer's page (three.js)
+  live.html              the viewer's page (three.js)
+  viam_logo.svg          the Viam logo, shown in panels with nothing to show yet
 tools/
   compare.py             compare variants of saved scans, or rigs (a table and a figure)
   compare_calibration.py compare hand-eye calibration methods on saved board runs
   viam_solve_batch.py    runs Viam's own hand-eye solver (needs .venv-opencv4, see recon/handeye.py)
   survey_map.py          draw the numbered map for an older session
-  viewer.py              replay a finished scan in the live viewer
   depth_previews.py      colored depth previews for older sessions
   render_mesh.py         render meshes to a PNG from the command line
   make_figures.py        this README's result figures

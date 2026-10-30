@@ -60,11 +60,12 @@ def step_name(kind: str, step: int) -> str:
 
 
 def colored_final(mesh_path: Path) -> o3d.geometry.TriangleMesh:
-    ''' The final (closed) mesh, with colors: a Poisson-closed mesh has none, so each
-    vertex takes the color of the nearest vertex of the measured surface (observed.ply). '''
+    ''' The final (closed) mesh, with colors: a Poisson-closed mesh has none (or all black),
+    so each vertex takes the color of the nearest vertex of the measured surface (observed.ply). '''
     mesh = o3d.io.read_triangle_mesh(str(mesh_path))
     observed_path = mesh_path.with_name("observed.ply")
-    if not mesh.has_vertex_colors() and observed_path.exists():
+    blank = not mesh.has_vertex_colors() or float(np.asarray(mesh.vertex_colors).max(initial=0.0)) < 0.01
+    if blank and observed_path.exists():  # Poisson can leave every vertex black
         observed = o3d.io.read_triangle_mesh(str(observed_path))
         if observed.has_vertex_colors() and len(observed.vertices):
             _, nearest = cKDTree(np.asarray(observed.vertices)).query(np.asarray(mesh.vertices))

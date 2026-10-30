@@ -53,3 +53,4 @@ device = "auto"              # CUDA when available
 enabled = true
 port = 8765
 monitor_camera = "webcam"    # a Viam camera component watching the whole cell ("" for none)
+monitor_fps = 24             # its live stream's frame rate (it shares the cloud connection with the scan)
