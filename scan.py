@@ -185,7 +185,9 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
         # Meshes and figures only after the arm is parked: they take a while and need no robot.
         for obj in selected(objects, args.objects):
             if session.views_dir(obj.id).exists():
-                pipeline.finish_object(session, obj.id, plane, config)
+                if robot.live:
+                    robot.live.message(f"Building object {obj.id}'s final mesh", "computing")
+                await asyncio.to_thread(pipeline.finish_object, session, obj.id, plane, config)
     if args.command == "scan" and not args.execute:
         log.info("Planning only. Add --execute to move the arm (and --step to confirm each object).")
 
@@ -292,7 +294,9 @@ async def scan_everything(robot: Robot, config: Config, execute: bool, max_views
     live = getattr(robot, "live", None)
     for obj in scanned:
         log.info("\nBuilding object %d's meshes and figures", obj.id)
-        pipeline.finish_object(session, obj.id, plane, config)
+        if live:
+            live.message(f"Building object {obj.id}'s final mesh", "computing")
+        await asyncio.to_thread(pipeline.finish_object, session, obj.id, plane, config)
         compare_object(session, obj, truth, truth_file)
         if live:
             live.show_final(session.recon_dir(obj.id) / "mesh.ply")

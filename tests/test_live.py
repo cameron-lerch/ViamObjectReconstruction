@@ -104,3 +104,5 @@ def test_the_monitoring_camera_streams_as_mjpeg(tmp_path):
     reader.join(timeout=5)
     live.close()
     assert received and b"--frame" in received[0] and b"Content-Type: image/jpeg" in received[0]
+
+

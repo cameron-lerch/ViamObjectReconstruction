@@ -38,6 +38,10 @@ MAX_TUCK = 60.0  # how far inside the outline (mm) the lowest seen surface may l
 FACING = 0.3  # a point counts only if its normal faces outward along the line (cos, about 73deg)
 LOWEST_SHARE = 0.05  # the lowest point is the 5th percentile by height, so one stray reading can't set it
 SMOOTH = 6.0  # tuck and height are medians over outline points within this distance (mm)
+# Only the first surface met going inward counts: a gap this long (mm) along the line
+# ends it. Inside an open cup, the line otherwise reaches the far side's inner wall
+# (also facing that way), and tucking the wall 58mm in cut away the whole flat bottom.
+SURFACE_GAP = 10.0
 # Table scraps: points this low (mm) that lie outside the outline of everything higher,
 # by more than SCRAP_MARGIN (mm). Judgment, from the second 2026-10-28 pumpkin scan.
 SCRAP_HEIGHT = 15.0
@@ -93,9 +97,14 @@ def lowest_seen(outline: np.ndarray, outward: np.ndarray, flat: np.ndarray, heig
         along = -(offset @ direction)  # how far inward
         across = np.abs(offset @ np.array([-direction[1], direction[0]]))
         facing = flat_normals[near] @ direction
-        hit = near[(along > -CORRIDOR) & (along < MAX_TUCK) & (across < CORRIDOR) & (facing > FACING)]
+        on_line = (along > -CORRIDOR) & (along < MAX_TUCK) & (across < CORRIDOR) & (facing > FACING)
+        hit, depth = near[on_line], along[on_line]
         if len(hit) == 0:
             continue
+        order = np.argsort(depth)
+        gaps = np.flatnonzero(np.diff(depth[order]) > SURFACE_GAP)
+        if len(gaps):
+            hit = hit[order[:gaps[0] + 1]]
         order = hit[np.argsort(heights[hit])]
         lowest = order[int(LOWEST_SHARE * (len(order) - 1))]
         tuck[i] = max(0.0, -((flat[lowest] - xy) @ direction))

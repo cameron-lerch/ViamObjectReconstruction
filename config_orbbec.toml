@@ -27,12 +27,22 @@ ready_camera_mm = []
 x_range = [-350, 700]
 y_range = [-650, 350]
 min_base_distance = 350
+# Survey views from 750mm up: the table must be past the Astra 2's 600mm minimum range.
+survey_height = 750
 
 [views]
-standoff = 280               # Orbbec Astra 2 minimum range differs from the RealSense's: check
+standoff = 650               # the Astra 2 measures nothing closer than 600mm (the RealSense: about 260mm)
 elevations_deg = [15, 25, 50, 72]
 azimuth_step_deg = 30
 min_camera_height = 80
+
+[camera]
+# The Astra 2's range starts at 600mm; beyond about 1300mm the table is too far to matter.
+min_depth = 600
+max_depth = 1300
+
+[board]
+view_height = 650             # the head-on board view, past the 600mm minimum range
 
 [capture]
 settle_s = 0.6

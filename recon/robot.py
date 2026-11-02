@@ -463,7 +463,7 @@ class Robot:
                 "camera_mount": (await self.camera_mount()).tolist()}
         self.last_frames = (colors, depths, color_ext) if keep else None
         if depths:
-            fused = median_depth(depths)
+            fused = await asyncio.to_thread(median_depth, depths)  # ~1.4s for 50 frames: off the loop
         else:
             intrinsics = await self.intrinsics()
             fused = np.zeros((intrinsics.height, intrinsics.width), np.uint16)

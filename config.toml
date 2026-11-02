@@ -24,10 +24,10 @@ y_range = [-650, 350]
 
 [views]
 standoff = 280               # camera to nearest point of the object
-elevations_deg = [15, 25, 50, 72]
+elevations_deg = [10, 15, 25, 50, 72]   # the 10deg ring asks first (confirm_below_deg)
 azimuth_step_deg = 30
 min_coverage = 0.85          # below this, the object is moved to a scan station
-min_camera_height = 80       # no view puts the camera lower than this above the table (mm)
+min_camera_height = 60       # no view puts the camera lower than this above the table (mm)
 
 [capture]
 settle_s = 0.6               # pause after each move before taking frames

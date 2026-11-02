@@ -19,7 +19,7 @@
   header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
   h1 { font-size: 18px; margin: 0; }
   #state { font-weight: 700; padding: 2px 10px; border-radius: 999px; background: var(--view); }
-  #state.running, #state.scanning { color: var(--ok); }
+  #state.running, #state.scanning, #state.computing { color: var(--ok); }
   #state.paused { color: var(--warn); }
   #state.complete { color: var(--stop); }
   #state.stopped, #state.done, #state.replay { color: var(--muted); }
@@ -306,7 +306,13 @@ async function refreshMesh() {
     info = `${step} view${step === 1 ? "" : "s"} fused`;
   }
   const key = `${url}|${panel.shade}`;
-  if (meshViewer.loaded === key) return;
+  if (meshViewer.loaded === key) {
+    // Already showing it, perhaps under an empty-state message (final mesh toggled
+    // on before it existed, then off): uncover it.
+    $("meshEmpty").hidden = true;
+    $("meshInfo").textContent = info;
+    return;
+  }
   meshViewer.loaded = key;
   try {
     const geometry = await load(url);
@@ -381,7 +387,6 @@ function refreshCamera() {
 }
 $("camera").onload = () => { $("cameraEmpty").hidden = true; $("camera").hidden = false; };
 $("camera").onerror = () => { $("camera").hidden = true; $("cameraEmpty").hidden = false; };
-
 
 function refreshMonitor() {
   const img = $("monitor");
@@ -493,7 +498,7 @@ for (const [id, mode] of Object.entries(CAMERA_BUTTONS)) {
 // ---------- status ----------
 
 function render(status) {
-  const labels = { complete: "scan complete", replay: "saved scan" };
+  const labels = { complete: "scan complete", replay: "saved scan", computing: "computing final mesh" };
   const state = status.paused && status.state !== "paused" ? "pausing" : status.stopping && !["stopped", "complete"].includes(status.state) ? "stopping" : status.state;
   $("state").textContent = labels[state] || state;
   $("state").className = status.state;

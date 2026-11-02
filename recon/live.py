@@ -35,7 +35,7 @@ import open3d as o3d
 from scipy.spatial import cKDTree
 
 from .config import Config
-from .reconstruct import integrate, new_grid
+from .reconstruct import integrate, local_table_plane, new_grid
 from .rgbd import back_project, height_preview, load_view
 from .robot import MoveDeclined
 from .scene import DetectedObject, TablePlane
@@ -294,7 +294,10 @@ class Live:
         try:
             started = time.monotonic()
             view = load_view(folder)
-            integrate(self._grid, view, view.T_world_cam, obj, plane, self.config)
+            # Crop at this view's own table, as the final mesh does: near the object the
+            # real table can sit a few mm above the survey's, and that band leaked in.
+            table = local_table_plane(view, view.T_world_cam, obj, plane, self.config)
+            integrate(self._grid, view, view.T_world_cam, obj, table, self.config)
             step = self.status()["history"] + 1
             # Surface seen by at least min(2, views) views, as the final mesh keeps.
             weight = min(self.config.reconstruct.min_views, step) - 0.5

@@ -38,7 +38,7 @@ async def capture_view(robot: Robot, folder, extra: dict | None = None, frames: 
     color, color_ext, depth, T_world_cam, meta = await robot.capture(frames, depth, keep=keep_frames)
     save_view(folder, color, depth, T_world_cam, await robot.intrinsics(), {**meta, **(extra or {})}, color_ext)
     if keep_frames and robot.last_frames:
-        save_frames(Path(folder) / "frames", *robot.last_frames)
+        await asyncio.to_thread(save_frames, Path(folder) / "frames", *robot.last_frames)  # ~1.7s for 50
     if robot.live:
         robot.live.captured(folder, robot.table_plane)
     return folder
@@ -430,8 +430,23 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
         robot.live.start_object(session.root.name, target, plane, len(done) + len(views))
         for count, (_, folder, _) in enumerate(done):  # the preview starts where the scan left off
             robot.live.view_captured(folder, count)
+    asked_low = skip_low = False
     for number, view in enumerate(views):
         index = first + number
+        low = view.candidate.elevation_deg < config.views.confirm_below_deg
+        if low and not asked_low:
+            asked_low = True
+            ring = [v for v in views[number:] if v.candidate.elevation_deg < config.views.confirm_below_deg]
+            height = view.T_world_cam[2, 3] - plane.z_at(*view.T_world_cam[:2, 3])
+            question = (f"Next: {len(ring)} low view(s) at {view.candidate.elevation_deg:.0f}deg, the camera about "
+                        f"{height:.0f}mm above the table. Watching the arm?")
+            if robot.live:
+                robot.live.message("Waiting at the terminal: confirm the low views")
+            skip_low = not await confirm(question)
+            if skip_low:
+                log.info("  skipping the %d low view(s)", len(ring))
+        if low and skip_low:
+            continue
         try:
             await robot.move(config.machine.camera, view.T_world_cam, world_state)
         except MoveDeclined:  # End Scan, STOP, or a declined preview: end here, not "skip this view"
@@ -528,7 +543,10 @@ def finish_object(session: Session, object_id: int, plane: TablePlane, config: C
     ''' Everything offline after an object's views are captured: its mesh, then the
     progression figure. '''
     reconstruct_object(session, object_id, plane, config, refine)
-    progression_snapshot(session, object_id, plane, config, refine)
+    try:  # a figure for people: it must never stop the run
+        progression_snapshot(session, object_id, plane, config, refine)
+    except Exception as error:
+        log.warning("  couldn't make the progression figure: %s", error)
 
 
 async def search_for_board(robot: Robot, session: Session, config: Config, spec: BoardSpec,

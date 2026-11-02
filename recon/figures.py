@@ -107,8 +107,11 @@ def progression_figure(folder: Path, svg: Path, title: str, counts: list[int],
     (from `progression`'s output in `folder`), and the closed mesh from the most. '''
     rows = {str(r["views"]): r for r in json.loads((folder / "summary.json").read_text())}
     last = max(counts)
-    closed = o3d.io.read_triangle_mesh(str(folder / f"views_{last:02d}" / "mesh.ply"))
-    center, radius = framing(closed)
+    path = folder / f"views_{last:02d}" / "mesh.ply"
+    closed = o3d.io.read_triangle_mesh(str(path)) if path.exists() else o3d.geometry.TriangleMesh()
+    # When closing failed there is no mesh.ply; frame on the observed surface instead.
+    final_observed = o3d.io.read_triangle_mesh(str(folder / f"views_{last:02d}" / "observed.ply"))
+    center, radius = framing(closed if len(closed.vertices) else final_observed)
     raw = np.asarray(o3d.io.read_point_cloud(str(folder / "views_01" / "raw_points.ply")).points)
     panels = [(render_points(raw, PANEL, elevation, azimuth, center, radius), "1 view: raw points",
                f"roughness {rows['raw']['roughness_mm']:.2f}mm")]
@@ -122,9 +125,12 @@ def progression_figure(folder: Path, svg: Path, title: str, counts: list[int],
         sub = (f"{measured}, roughness {row['roughness_mm']:.2f}mm"
                if row.get("roughness_mm") == row.get("roughness_mm") and row.get("roughness_mm") is not None else "nothing measured")
         panels.append((render(observed, PANEL, elevation, azimuth, center, radius), f"{k} view{'s' if k > 1 else ''}: observed", sub))
-    cloud = np.asarray(o3d.io.read_triangle_mesh(str(folder / f"views_{last:02d}" / "observed.ply")).vertices)
-    panels.append((render(color_measured(closed, cloud), PANEL, elevation, azimuth, center, radius, use_colors=True),
-                   f"{last} views: closed", f"{rows[str(last)]['measured_share']:.0%} measured; orange = filled in"))
+    if len(closed.triangles):
+        cloud = np.asarray(final_observed.vertices)
+        panels.append((render(color_measured(closed, cloud), PANEL, elevation, azimuth, center, radius, use_colors=True),
+                       f"{last} views: closed", f"{rows[str(last)]['measured_share']:.0%} measured; orange = filled in"))
+    else:
+        panels.append((render(o3d.geometry.TriangleMesh(), PANEL), f"{last} views: closed", "closing failed"))
     row_figure(svg, title, panels, "Observed meshes: 1 view keeps all it saw; 2+ views keep surface at least 2 of them agree on. Red lines mark open edges.")
 
 

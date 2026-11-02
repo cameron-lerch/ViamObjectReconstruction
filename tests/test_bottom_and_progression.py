@@ -55,6 +55,26 @@ def test_wall_tucks_in_under_a_rounded_object():
     assert radius[vertices[:, 2] > 35].max() == pytest.approx(40, abs=2)
 
 
+def test_open_cup_keeps_its_flat_bottom():
+    # An open cup (30mm outer, 25mm inner radius, floor 8mm up) whose outer wall was seen
+    # only from 20mm up. Looking inward from the outline, the far side's inner wall also
+    # faces outward and reaches lower; tucking the wall in to it removed the whole bottom.
+    rng = np.random.default_rng(0)
+    angle = rng.uniform(0, 2 * np.pi, 20000)
+    ring = np.column_stack([np.cos(angle), np.sin(angle), np.zeros_like(angle)])
+    outer = ring * 30 + np.outer(rng.uniform(20, 55, len(angle)), [0, 0, 1])
+    inner = ring * 25 + np.outer(rng.uniform(8, 55, len(angle)), [0, 0, 1])
+    points, normals = np.vstack([outer, inner]), np.vstack([ring, -ring])
+    cloud = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points))
+    cloud.normals = o3d.utility.Vector3dVector(normals)
+    mesh = close_with_flat_bottom(cloud, TABLE, shrink=0.0)
+    vertices = np.asarray(mesh.vertices)
+    assert boundary_edge_count(mesh) == 0
+    assert np.linalg.norm(vertices[:, :2], axis=1).max() < 40  # no balloon
+    floor = vertices[vertices[:, 2] < 0.5]
+    assert np.linalg.norm(floor[:, :2], axis=1).max() == pytest.approx(30, abs=3)
+
+
 def test_progression_improves_with_more_views(tmp_path):
     config = Config()
     config.views.azimuth_step_deg = 60

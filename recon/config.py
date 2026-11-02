@@ -136,9 +136,13 @@ class ViewConfig:
     aim_height_fraction: float = 0.4
     # No view puts the camera lower than this above the table (mm). A second guard
     # besides the motion planner's table slab, which only knows the arm's collision
-    # model. Judgment: the lowest ring (15deg) keeps the camera above about 90mm even for
-    # a 30mm block, so this only matters for small objects or lower rings.
-    min_camera_height: float = 80.0
+    # model. Judgment: 80mm until 2026-10-30; lowered to 60mm with the 10deg ring, whose
+    # camera is 81-95mm up on the test objects (80mm left only 1-2mm to spare).
+    min_camera_height: float = 60.0
+    # Before the first view below this elevation (deg), ask the operator once per object,
+    # so someone is watching the arm when it goes that low (Enter: go on, n: skip those views).
+    # Set after adding the 10deg ring (2026-10-30), whose camera is 81-95mm above the table.
+    confirm_below_deg: float = 12.0
 
 
 @dataclass

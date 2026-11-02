@@ -13,3 +13,6 @@ data/
 
 # Working to-do list (not shared)
 TODO.md
+
+# README backups (local only)
+README_backup_*.md
