@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from recon.config import Config, load_config  # noqa: E402
-from recon.figures import PANEL, color_measured, comparison_figure, framing, progression_figure, row_figure  # noqa: E402
+from recon.figures import PANEL, color_measured, comparison_figure, facing_the_arm, framing, progression_figure, row_figure  # noqa: E402
 from recon.measure import compare, measure  # noqa: E402
 from recon.pipeline import scanned_object  # noqa: E402
 from recon.progression import measured_share  # noqa: E402
@@ -146,23 +146,24 @@ def main() -> None:
     parser.add_argument("--real-object", type=int, default=1)
     parser.add_argument("--synthetic", default="data/demo-20261027-113147")
     parser.add_argument("--old-synthetic", default="data/demo-20261026-130458", help="a demo built with the first alignment approach")
-    parser.add_argument("--latest", default="data/20261028-093620", help="the scans in README section 3.1 (block 0, cylinder 1)")
-    parser.add_argument("--only-latest", action="store_true", help="only the figures of --latest (no reconstruction runs)")
+    parser.add_argument("--block", default="data/20261102-141308-orange-block", help="the orange block's full scan")
+    parser.add_argument("--cylinder", default="data/20261103-091105-green-cylinder", help="the green cylinder's full scan")
+    parser.add_argument("--only-latest", action="store_true", help="only the full scans' figures (no reconstruction runs)")
     parser.add_argument("--only-calibration", action="store_true", help="only the uncalibrated vs. calibrated figure")
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     if args.only_calibration:
         calibration_figure(Session(ROOT / args.real), args.real_object)
         return
-    latest = Session(ROOT / args.latest)
-    observed_vs_closed_figure(latest, 0, "observed_vs_closed_block", "Orange block, 34 views: observed.obj vs. mesh.obj")
-    observed_vs_closed_figure(latest, 1, "observed_vs_closed_cylinder", "Green cylinder, 34 views: observed.obj vs. mesh.obj")
+    block, cylinder = Session(ROOT / args.block), Session(ROOT / args.cylinder)
+    observed_vs_closed_figure(block, 0, "observed_vs_closed_block", "Orange block: observed.obj vs. mesh.obj")
+    observed_vs_closed_figure(cylinder, 0, "observed_vs_closed_cylinder", "Green cylinder: observed.obj vs. mesh.obj")
+    measured_figure(cylinder.recon_dir(0) / "progression", [1, 8, 16, 50], 20, facing_the_arm(scanned_object(cylinder, 0).center))
     if args.only_latest:
         return
     real = Session(ROOT / args.real)
     real_folder = real.recon_dir(args.real_object) / "progression"
     progression_figure(real_folder, OUT / "progression_real.svg", "Real cylinder: one view vs. many", [1, 3, 8, 25])
-    measured_figure(real_folder, [1, 8, 25], 20, -60)
     synthetic = Session(ROOT / args.synthetic)
     progression_figure(synthetic.recon_dir(1) / "progression", OUT / "progression_synthetic.svg",
                        "Synthetic cylinder (known shape): one view vs. many", [1, 3, 8, 37])

@@ -19,7 +19,7 @@ from .progression import progression
 from .reconstruct import reconstruct, save_reconstruction
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
 from .rgbd import back_project, load_view, load_views, save_frames, save_view
-from .robot import MoveDeclined, Robot
+from .robot import MissedTarget, MoveDeclined, Robot, RobotUnresponsive
 from .scene import DetectedObject, TablePlane, clutter_around, detect_objects, fit_table_plane, merge_views, views_agree
 from .session import Session
 from .survey_map import survey_map
@@ -50,7 +50,11 @@ async def move_camera_looking_down(robot: Robot, x: float, y: float, z: float, w
     if pose is None:
         log.warning("Cannot reach overhead view at (%.0f, %.0f, %.0f): %s", x, y, z, reason)
         return False
-    await robot.move(camera, pose, world_state)
+    try:
+        await robot.move(camera, pose, world_state)
+    except MissedTarget as missed:  # skip this position rather than capture from the wrong place
+        log.warning("Overhead view at (%.0f, %.0f, %.0f) skipped: %s", x, y, z, missed)
+        return False
     return True
 
 
@@ -450,6 +454,8 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
         try:
             await robot.move(config.machine.camera, view.T_world_cam, world_state)
         except MoveDeclined:  # End Scan, STOP, or a declined preview: end here, not "skip this view"
+            raise
+        except RobotUnresponsive:  # the robot stopped answering: end the run (scan.py says how to resume)
             raise
         except Exception as error:  # the planner can still fail on a path it approved from elsewhere
             log.warning("  view %d (%s) skipped: %s", index, view.candidate.describe(), error)

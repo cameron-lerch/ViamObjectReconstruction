@@ -38,7 +38,7 @@ import open3d as o3d
 from scipy.spatial import cKDTree
 
 from .config import Config
-from .reconstruct import build_mesh, object_mask, refined_views, surface_distances, write_meshes
+from .reconstruct import build_mesh, object_mask, refined_views, surface_distances, views_seeing, write_meshes
 from .rgbd import View, back_project, to_point_cloud
 from .scene import DetectedObject, TablePlane
 
@@ -126,6 +126,7 @@ def progression(views: list[View], obj: DetectedObject, plane: TablePlane, confi
                 truth: o3d.geometry.TriangleMesh | None = None, min_views: int | None = None) -> list[dict]:
     ''' `min_views` overrides the "seen by at least min(N, k) views" rule for every subset. '''
     folder = Path(folder)
+    views = views_seeing(views, obj, config)
     log.info("Aligning all %d views once", len(views))
     obj, poses, planes, _ = refined_views(views, obj, plane, config, refine)
     posed = [View(v.color, v.depth, pose, v.intrinsics, v.meta, v.name) for v, pose in zip(views, poses)]

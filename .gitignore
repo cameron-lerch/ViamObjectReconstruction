@@ -16,3 +16,6 @@ TODO.md
 
 # README backups (local only)
 README_backup_*.md
+
+# Packaged datasets (published as GitHub Release assets, not committed)
+dist/

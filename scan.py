@@ -41,7 +41,7 @@ from recon.progression import table as progression_table
 from recon.reconstruct import object_mask, surface_distances
 from recon.rgbd import back_project, load_views, save_view
 from recon.live import Live
-from recon.robot import MoveDeclined, PoseMismatch, Robot, connect
+from recon.robot import MoveDeclined, PoseMismatch, Robot, RobotUnresponsive, connect
 from recon.scene import detect_objects, fit_table_plane
 from recon.session import Session
 from recon.touchoff import touch_off
@@ -65,32 +65,55 @@ async def with_robot(config: Config, steps, confirm_moves: bool = False, confirm
     ''' Connect, check the arm's pose, run `steps(robot)`, and stop safely on any interruption.
     With `go_ready` (any run that moves the arm), first move to the ready pose (Robot.go_ready). '''
     machine = await connect(config)
-    async with machine:
-        robot = Robot(machine, config)
-        robot.confirm_moves = confirm_moves or confirm_above is not None
-        robot.confirm_above_deg = confirm_above
-        if config.live.enabled:
-            robot.live = Live(config, config.resolve(config.data_dir) / "live")
-            robot.live.start_server()
-            robot.live.attach(robot, asyncio.get_running_loop())
+    try:
+        await _run_with(machine, config, steps, confirm_moves, confirm_above, go_ready)
+    finally:
+        try:  # closing a dead connection can hang too
+            await asyncio.wait_for(machine.close(), 10)
+        except Exception as error:
+            log.warning("Couldn't close the connection cleanly: %s", error or type(error).__name__)
+
+
+async def _run_with(machine, config: Config, steps, confirm_moves: bool, confirm_above: float | None,
+                    go_ready: bool) -> None:
+    ''' The body of with_robot, on an open connection. '''
+    robot = Robot(machine, config)
+    robot.confirm_moves = confirm_moves or confirm_above is not None
+    robot.confirm_above_deg = confirm_above
+    if config.live.enabled:
+        robot.live = Live(config, config.resolve(config.data_dir) / "live")
+        robot.live.start_server()
+        robot.live.attach(robot, asyncio.get_running_loop())
+    try:
+        await robot.checked_camera_pose()
+        if go_ready:
+            await robot.go_ready()
+        await steps(robot)
+    except MoveDeclined as declined:
+        log.info("Stopped: %s. The arm is where it was before that move.", declined)
+    except PoseMismatch as mismatch:
+        log.error("STOPPED, no further motion. %s", mismatch)
+    except RobotUnresponsive as silent:
+        log.error("STOPPED: %s. viam-server may have restarted, or the connection dropped.", silent)
         try:
-            await robot.checked_camera_pose()
-            if go_ready:
-                await robot.go_ready()
-            await steps(robot)
-        except MoveDeclined as declined:
-            log.info("Stopped: %s. The arm is where it was before that move.", declined)
-        except PoseMismatch as mismatch:
-            log.error("STOPPED, no further motion. %s", mismatch)
-        except asyncio.CancelledError:
-            # Ctrl+C: halt the arm before disconnecting. The e-stop remains the real safety.
-            log.warning("Interrupted; stopping the arm")
-            await robot.arm.stop()
-            raise
-        finally:
-            if robot.live:
-                robot.live.message("Finished; the arm is parked or stopped", "done")
-                robot.live.close()
+            await asyncio.wait_for(robot.arm.stop(), 5)
+        except Exception:
+            log.error("  Couldn't reach the arm to stop it; check it in the Viam app or at the cell.")
+        try:
+            latest = Session.latest(config.resolve(config.data_dir)).root
+            log.error("  Every captured view is saved. Once the machine is healthy, continue with the same options:\n"
+                      "    python scan.py --resume %s", latest.relative_to(config.resolve(".")))
+        except Exception:
+            log.error("  Every captured view is saved; continue with scan.py --resume data/<session>.")
+    except asyncio.CancelledError:
+        # Ctrl+C: halt the arm before disconnecting. The e-stop remains the real safety.
+        log.warning("Interrupted; stopping the arm")
+        await robot.arm.stop()
+        raise
+    finally:
+        if robot.live:
+            robot.live.message("Finished; the arm is parked or stopped", "done")
+            robot.live.close()
 
 
 async def run_robot(args, config: Config) -> None:

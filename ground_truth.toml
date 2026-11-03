@@ -1,37 +1,131 @@
 # Caliper measurements of the test objects (mm), used by `scan.py compare --objects N --truth NAME`.
 # `width` and `length` are the two horizontal sides of a block standing upright;
-# the top-level values are the averages of the measurements listed with them.
+# the top-level values are the averages of the measurements listed with them, and
+# `spread` is their standard deviation.
+#
+# Treat these as good, not perfect. The objects are cheap toys, not precision parts, and
+# their paint thickness varies. The readings depend on how level the calipers are and how
+# hard they're pressed (firmly vs. resting: about 0.07mm), so each was taken just snug.
+# Diameters were measured at each end and the middle, rotating the object between readings;
+# block sides were measured near each end, moving the calipers slightly between readings.
 
 [green_cylinder]
 shape = "cylinder"
-diameter = 29.53
-height = 59.93
-measured = { diameter = [29.51, 29.55, 29.52], height = [59.93] }  # top, middle, bottom
+diameter = 29.78
+height = 59.80
+# 2026-11-03: 10 at each end and 10 near the middle (end 1 averages 29.84, middle 29.71, end 2
+# 29.86), plus the first 3 (2026-10-27). One height reading, 29.79, is left out as a likely typo.
+
+[green_cylinder.spread]
+diameter = 0.18
+height = 0.09
+
+[green_cylinder.measured]
+diameter = [29.51, 29.55, 29.52,
+          29.93, 30.00, 30.06, 29.85, 29.59, 29.66, 29.79, 29.60, 29.97, 29.92,
+          29.55, 29.80, 29.85, 29.83, 29.55, 29.66, 29.53, 29.64, 29.78, 29.88,
+          29.88, 30.09, 29.91, 29.70, 29.65, 29.52, 29.84, 29.87, 30.07, 30.03]
+height = [59.93, 59.80, 59.77, 59.71, 59.70, 59.77, 59.77, 59.76, 59.79, 59.97]
 
 [yellow_block]
 shape = "box"
 width = 29.26
 length = 29.48
 height = 60.05
-measured = { width = [29.28, 29.26, 29.25], length = [29.45, 29.48, 29.52], height = [60.02, 60.08] }
+
+[yellow_block.measured]
+width = [29.28, 29.26, 29.25]
+length = [29.45, 29.48, 29.52]
+height = [60.02, 60.08]
 
 [orange_block]
 shape = "box"
-width = 29.73
-length = 29.63
-height = 60.05
-measured = { width = [29.71, 29.77, 29.71], length = [29.66, 29.56, 29.68], height = [60.02, 60.08] }
+width = 29.71
+length = 29.64
+height = 60.04
+# 2026-11-03: 10 near each end for each side, and 10 heights, plus the first ones (2026-10-27).
+# One width reading, written "29.29.71", is left out as a likely typo.
+
+[orange_block.spread]
+width = 0.03
+length = 0.03
+height = 0.03
+
+[orange_block.measured]
+width = [29.71, 29.77, 29.71,
+          29.71, 29.72, 29.64, 29.70, 29.72, 29.66, 29.71, 29.70, 29.73,
+          29.72, 29.71, 29.70, 29.74, 29.71, 29.72, 29.68, 29.70, 29.66, 29.69]
+length = [29.66, 29.56, 29.68,
+          29.60, 29.66, 29.62, 29.67, 29.66, 29.65, 29.62, 29.68, 29.66, 29.67,
+          29.60, 29.64, 29.66, 29.64, 29.65, 29.65, 29.60, 29.63, 29.58, 29.64]
+height = [60.02, 60.08, 60.00, 60.02, 59.97, 60.06, 60.05, 60.06, 60.01, 60.08, 60.04, 60.06]
 
 [red_block]
 shape = "box"
 width = 30.15
 length = 29.18
 height = 29.44
-measured = { width = [30.15, 30.17, 30.13], length = [29.09, 29.16, 29.29], height = [29.40, 29.48] }
+
+# The mug and the cup: shapes the comparison can't fit yet (`scan.py compare` only fits
+# blocks, cylinders, spheres and bowls, and ignores other shapes), recorded for later analysis.
+# Both taper toward the rim, so wall thickness and diameter depend on where they're taken.
+
+[red_block.measured]
+width = [30.15, 30.17, 30.13]
+length = [29.09, 29.16, 29.29]
+height = [29.40, 29.48]
+
+[mug]
+shape = "mug"
+height = 95.93              # table to rim, around the rim
+inside_depth = 86.95        # rim to the inside bottom (hard to reach: the inside bottom tapers)
+diameter_base = 81.73       # outside, near the base (hard to find the widest point by hand)
+diameter_top = 82.35        # outside, at the top
+wall = 6.08                 # about 40mm below the rim
+handle_thickness = 8.01     # perpendicular to the handle's surface; varies along it
+handle_width = 15.04        # along the handle's surface
+
+[mug.spread]
+height = 0.18
+inside_depth = 0.26
+diameter_base = 0.15
+diameter_top = 0.34
+wall = 0.24
+handle_thickness = 0.35
+handle_width = 0.26
+
+[mug.measured]
+height = [96.04, 96.20, 96.23, 95.91, 95.92, 96.04, 95.69, 95.75, 95.76, 95.86, 95.67, 95.92, 96.13, 95.97]
+inside_depth = [86.68, 87.30, 86.91, 86.90, 86.85, 86.46, 87.06, 86.99, 87.01, 87.33]
+diameter_base = [81.43, 81.80, 81.72, 81.42, 81.78, 81.80, 81.83, 81.72, 81.84, 81.78, 81.86]
+diameter_top = [82.36, 82.67, 82.09, 81.95, 82.70, 82.37, 82.77, 82.20, 81.80, 82.64]
+wall = [5.84, 5.82, 5.68, 6.13, 6.45, 6.30, 6.27, 6.18, 5.88, 6.26, 6.10]
+handle_thickness = [8.76, 8.15, 7.92, 7.81, 7.66, 7.74, 7.73, 8.00, 7.88, 8.44]
+handle_width = [15.45, 15.28, 15.12, 15.09, 14.9, 14.75, 14.73, 14.83, 14.86, 15.35]
+
+[cup]
+shape = "cup"
+height = 57.03              # table to rim, around the rim (the rim is uneven: 56.31-57.61)
+inside_depth = 51.83        # rim to the inside bottom (hard to reach: tapers)
+diameter_top = 72.69        # outside, at the top
+diameter_bottom = 48.0      # rough: traced around the bottom with a pencil, not calipers
+wall = 5.02                 # about 40mm below the rim
 
 # The 3D-printed objects (calibration/printed_objects/): calipers agree with the CAD within
 # 0.15mm (2026-10-29), so these are the CAD dimensions; `cad` is the printed STL, used to map
 # the surface error everywhere (tools/compare.py). Black, glossy PLA.
+
+[cup.spread]
+height = 0.50
+inside_depth = 0.58
+diameter_top = 0.49
+wall = 0.04
+
+[cup.measured]
+height = [56.61, 56.71, 57.50, 57.51, 56.88, 56.31, 57.57, 57.61, 56.77, 56.44, 57.43]
+inside_depth = [51.80, 50.72, 52.33, 51.99, 51.27, 51.86, 52.65, 52.39, 51.95, 51.34]
+diameter_top = [73.08, 72.09, 73.35, 72.80, 72.23, 72.38, 72.59, 72.13, 73.40, 72.89]
+wall = [5.03, 5.00, 4.97, 4.98, 5.03, 5.05, 5.00, 5.05, 5.11, 5.01]
 
 [printed_block]
 shape = "box"

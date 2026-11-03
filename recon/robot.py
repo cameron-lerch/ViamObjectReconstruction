@@ -83,8 +83,24 @@ POSE_TOLERANCE_MM = 2.0
 POSE_TOLERANCE_DEG = 1.0
 
 
+# After a move, the arm's end must be this close to where it was sent. The motion service
+# reported success on moves that ended elsewhere (a bowl scan, 2026-11-03: twice the camera
+# ended up facing away from the object), and a view captured there would be placed wrongly.
+REACH_TOLERANCE_MM = 10.0
+REACH_TOLERANCE_DEG = 5.0
+
+
 class PoseMismatch(RuntimeError):
     ''' Viam's frame system and the arm controller disagree about where the arm is. '''
+
+
+class MissedTarget(RuntimeError):
+    ''' A move finished, but the arm's end isn't where it was sent. '''
+
+
+class RobotUnresponsive(RuntimeError):
+    ''' A call to the robot got no answer, twice: the connection or viam-server is likely gone
+    (on 2026-11-03 viam-server restarted mid-scan, and the scan waited for an answer forever). '''
 
 
 class MoveDeclined(Exception):
@@ -162,13 +178,14 @@ class Robot:
 
     async def intrinsics(self) -> Intrinsics:
         if self._intrinsics is None:
-            properties = await self.camera.get_properties()
+            properties = await self.ask("the camera's properties", lambda: self.camera.get_properties())
             self._intrinsics = Intrinsics.from_viam(properties.intrinsic_parameters)
         return self._intrinsics
 
     async def frame_pose(self, frame: str) -> np.ndarray:
         ''' Current pose of any frame in the world, according to Viam's frame system. '''
-        result = await self.machine.transform_pose(PoseInFrame(reference_frame=frame, pose=Pose(o_z=1)), "world")
+        result = await self.ask(f"the pose of {frame!r}", lambda: self.machine.transform_pose(
+            PoseInFrame(reference_frame=frame, pose=Pose(o_z=1)), "world"))
         return pose_to_matrix(result.pose)
 
     async def camera_mount(self) -> np.ndarray:
@@ -180,7 +197,7 @@ class Robot:
         '''
         self._mount_from_file()
         if self._camera_mount is None:
-            for part in await self.machine.get_frame_system_config():
+            for part in await self.ask("the frame system", lambda: self.machine.get_frame_system_config()):
                 frame = part.frame
                 if frame.reference_frame == self.config.machine.camera:
                     parent = frame.pose_in_observer_frame.reference_frame
@@ -200,11 +217,11 @@ class Robot:
         checks collisions with the frame system, so a disagreement stops everything.
         '''
         frame_system = await self.frame_pose(self.config.machine.arm)
-        controller = pose_to_matrix(await self.arm.get_end_position())
+        controller = pose_to_matrix(await self.ask("the arm's position", lambda: self.arm.get_end_position()))
         shift = float(np.linalg.norm(frame_system[:3, 3] - controller[:3, 3]))
         angle = rotation_angle_deg(frame_system[:3, :3].T @ controller[:3, :3])
         if shift > POSE_TOLERANCE_MM or angle > POSE_TOLERANCE_DEG:
-            joints = [round(v, 1) for v in (await self.arm.get_joint_positions()).values]
+            joints = [round(v, 1) for v in (await self.ask("the arm's joints", lambda: self.arm.get_joint_positions())).values]
             raise PoseMismatch(
                 f"Frame system and arm controller disagree about the arm's end by {shift:.1f}mm / {angle:.1f}deg.\n"
                 f"  frame system: position {frame_system[:3, 3].round(1)}, x-axis {frame_system[:3, 0].round(3)}\n"
@@ -321,8 +338,34 @@ class Robot:
             return None, None, max(set(reasons), key=reasons.count) if reasons else "no rolls configured"
         return best[1], best[2], best[3]
 
+    async def ask(self, what: str, call, timeout: float | None = None):
+        ''' Await `call()` (a call to the robot) with a deadline. A call that gets no answer is
+        asked once more; a second miss raises RobotUnresponsive, which ends the run. '''
+        timeout = timeout or self.config.capture.call_timeout_s
+        for attempt in (1, 2):
+            try:
+                return await asyncio.wait_for(call(), timeout)
+            except TimeoutError:
+                if attempt == 2:
+                    raise RobotUnresponsive(f"no answer from the robot to {what} within {timeout:.0f}s, twice") from None
+                log.warning("  no answer from the robot to %s within %.0fs; asking again", what, timeout)
+
     async def move(self, frame: str, T_world: np.ndarray, world_state: WorldState | None = None,
                    linear: bool = False) -> None:
+        ''' Move `frame` to `T_world`. A move that finishes away from its target is tried again
+        from wherever the arm ended up (`capture.move_retries` times) before it fails. '''
+        attempts = 1 + max(self.config.capture.move_retries, 0)
+        for attempt in range(1, attempts + 1):
+            try:
+                await self._move_once(frame, T_world, world_state, linear)
+                return
+            except MissedTarget as missed:
+                if attempt == attempts:
+                    raise
+                log.warning("  %s; trying the move again (%d of %d)", missed, attempt + 1, attempts)
+
+    async def _move_once(self, frame: str, T_world: np.ndarray, world_state: WorldState | None,
+                         linear: bool) -> None:
         if self.live:
             await self.live.checkpoint()
         if world_state is None:  # still the table, the clutter and the camera guard
@@ -347,7 +390,14 @@ class Robot:
         if not moved:
             raise RuntimeError(f"Motion service did not complete the move of {frame!r}")
         await self.wait_until_still()
-        await self.checked_camera_pose()
+        reached = await self.checked_camera_pose()
+        if frame == self.config.machine.arm:  # camera targets were resolved to the arm's end
+            end = reached @ np.linalg.inv(await self.camera_mount())
+            shift = float(np.linalg.norm(end[:3, 3] - T_world[:3, 3]))
+            angle = rotation_angle_deg(T_world[:3, :3].T @ end[:3, :3])
+            if shift > REACH_TOLERANCE_MM or angle > REACH_TOLERANCE_DEG:
+                raise MissedTarget(f"the move finished {shift:.0f}mm / {angle:.0f}deg from its target "
+                                   f"(arm's end at {end[:3, 3].round(0)}, sent to {T_world[:3, 3].round(0)})")
 
     async def _confirm_move(self, frame: str, T_world: np.ndarray, world_state: WorldState | None,
                             linear: bool) -> None:
@@ -406,7 +456,7 @@ class Robot:
 
     async def wait_until_still(self, timeout: float = 10.0) -> None:
         deadline = time.monotonic() + timeout
-        while await self.arm.is_moving():
+        while await self.ask("whether the arm is moving", lambda: self.arm.is_moving()):
             if time.monotonic() > deadline:
                 raise TimeoutError("Arm still reports motion")
             await asyncio.sleep(0.05)
@@ -428,7 +478,8 @@ class Robot:
         frames = frames or capture.frames_per_view
         await self.wait_until_still()
         # The robot's clock at the stop, from a cheap color-only frame.
-        _, metadata = await self.camera.get_images(filter_source_names=[names.color_source])
+        _, metadata = await self.ask("a color frame", lambda: self.camera.get_images(filter_source_names=[names.color_source]),
+                                     capture.frame_request_timeout_s)
         stopped_at = metadata.captured_at.ToMicroseconds() / 1e6
         await asyncio.sleep(capture.settle_s)
 
@@ -439,7 +490,8 @@ class Robot:
         while len(stamps) < frames:
             if time.monotonic() > deadline:
                 raise TimeoutError(f"Got only {len(stamps)} of {frames} fresh frames")
-            images, metadata = await self.camera.get_images(filter_source_names=sources)
+            images, metadata = await self.ask("a frame", lambda: self.camera.get_images(filter_source_names=sources),
+                                              capture.frame_request_timeout_s)
             stamp = metadata.captured_at.ToMicroseconds() / 1e6
             if stopped_at and (stamp < stopped_at + capture.settle_s or stamp in stamps):
                 await asyncio.sleep(0.02)
@@ -458,7 +510,7 @@ class Robot:
             stamps.append(stamp)
 
         T_world_cam = await self.checked_camera_pose()
-        joints = list((await self.arm.get_joint_positions()).values)
+        joints = list((await self.ask("the arm's joints", lambda: self.arm.get_joint_positions())).values)
         meta = {"captured_at": stamps, "joints_deg": joints, "frames": frames, "depth": depth,
                 "camera_mount": (await self.camera_mount()).tolist()}
         self.last_frames = (colors, depths, color_ext) if keep else None

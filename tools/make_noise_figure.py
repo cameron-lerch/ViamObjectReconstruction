@@ -202,6 +202,8 @@ def main() -> None:
     parser.add_argument("--object", type=int, default=0)
     parser.add_argument("--views", type=int, default=4)
     parser.add_argument("--name", default="raw_view_noise", help="output file name in media/images (no extension)")
+    parser.add_argument("--title", default="RealSense images, one view at a time", help="the figure's title")
+    parser.add_argument("--pick", help="views to show, comma-separated (e.g. view_000,view_018); default: spread out")
     args = parser.parse_args()
     config = load_config(ROOT / "config.toml")
     session = Session(args.session) if args.session else Session.latest(config.resolve(config.data_dir))
@@ -215,7 +217,9 @@ def main() -> None:
 
     side_axes = render_axes()
     columns = []
-    for view in pick_views(views, args.views):
+    by_name = {view.name: view for view in views}
+    picked = [by_name[name] for name in args.pick.split(",")] if args.pick else pick_views(views, args.views)
+    for view in picked:
         points, colors = raw_points(view, obj)
         elevation = view.meta.get("elevation_deg", 90.0)
         azimuth = view.meta.get("azimuth_deg", 0.0)
@@ -223,8 +227,9 @@ def main() -> None:
         quarter_turns = match_turn(axes)
         image, axes = turned(image, axes, quarter_turns)
         print(f"  {view.name}: color image turned {90 * quarter_turns} deg counterclockwise")
+        print(f"    ({elevation:.0f}° up, {azimuth:.0f}° around)")
         columns.append((image, axes, side(points, colors), side_axes,
-                        f"{elevation:.0f}° up, {azimuth:.0f}° around", f"{len(points):,} raw points"))
+                        f"Frame {len(columns) + 1}", f"{len(points):,} raw points"))
 
     clouds = [raw_points(view, obj) for view in views]
     everything = np.concatenate([p for p, _ in clouds])
@@ -239,9 +244,7 @@ def main() -> None:
         fused_label = "(run reconstruct for the fused mesh)"
     columns.append((side(everything[shown]), side_axes, fused, side_axes, f"All {len(views)} views together",
                     f"{len(everything) / 1e6:.1f}M points; {fused_label}"))
-    named = f" ({obj.color_name})" if obj.color_name else ""
-    grid_svg(args.name, f"What the RealSense gives us, one view at a time: object {args.object}{named}",
-             columns, "Top: the color image, turned so the table is at the bottom. Bottom: that view's depth as points, unfiltered, all drawn from the same side-on direction.")
+    grid_svg(args.name, args.title, columns, "Top: the color image, turned so the table is at the bottom. Bottom: that view's depth as points, unfiltered, all drawn from the same side-on direction.")
 
 
 if __name__ == "__main__":

@@ -156,6 +156,15 @@ class CaptureConfig:
     # Frames per survey view: finding objects needs less precision than scanning them.
     survey_frames: int = 1
     move_timeout_s: float = 60.0
+    # Deadlines for single requests to the robot (robot.Robot.ask). A request with no answer is
+    # asked once more; a second miss ends the run with the --resume command, instead of waiting
+    # forever when viam-server restarts or the connection drops. Frames normally take 2-12s
+    # over the cloud connection (a 1.8MB depth image); poses and joints, well under a second.
+    frame_request_timeout_s: float = 30.0
+    call_timeout_s: float = 15.0
+    # A move that finishes more than 10mm / 5deg from its target (robot.REACH_TOLERANCE_*) is
+    # tried again this many times, from wherever the arm ended up, before the view is skipped.
+    move_retries: int = 1
     # `scan.py --full-scan`: this many frames per scan view, and every raw frame saved
     # (views/view_NNN/frames/), for a dataset to subsample later. About 2.6s per frame
     # over the cloud connection, so 50 frames take about 2 minutes per view.

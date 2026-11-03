@@ -71,6 +71,24 @@ def local_table_plane(view: View, pose: np.ndarray, obj: DetectedObject, fallbac
     return TablePlane(normal, float(d * np.sign(c)))
 
 
+# A view needs this many points (every 4th pixel) near the object to take part; fewer means
+# the arm ended up looking elsewhere (it happened twice in one bowl scan, 2026-11-03).
+MIN_OBJECT_POINTS = 200
+
+
+def views_seeing(views: list[View], obj: DetectedObject, config: Config) -> list[View]:
+    ''' The views that actually see the object; any others are left out, with a warning. '''
+    kept = []
+    for view in views:
+        points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth,
+                                    edge_grow=config.reconstruct.edge_grow)
+        if obj.contains(points, config.reconstruct.context_margin).sum() >= MIN_OBJECT_POINTS:
+            kept.append(view)
+        else:
+            log.warning("%s doesn't see the object (the arm may have ended up elsewhere); leaving it out", view.name)
+    return kept
+
+
 def registration_cloud(view: View, obj: DetectedObject, config: Config) -> o3d.geometry.PointCloud:
     settings = config.reconstruct
     points, colors, pixels = back_project(view, settings.pixel_stride, config.camera.min_depth, config.camera.max_depth, edge_grow=config.reconstruct.edge_grow)
@@ -221,6 +239,11 @@ def integrate(grid: o3d.t.geometry.VoxelBlockGrid, view: View, pose: np.ndarray,
     keep = object_mask(points, obj, plane, settings)
     if settings.max_incidence_deg < 90:
         keep &= incidence_deg(view.depth, view.intrinsics)[pixels[:, 0], pixels[:, 1]] <= settings.max_incidence_deg
+    if not keep.any():
+        # A view that doesn't see the object (an arm that ended up elsewhere) adds nothing;
+        # Open3D raises instead of integrating an empty depth image.
+        log.warning("%s sees nothing of the object; leaving it out", view.name)
+        return
     depth = np.zeros_like(view.depth)
     rows, cols = pixels[keep].T
     depth[rows, cols] = view.depth[rows, cols]
@@ -391,6 +414,7 @@ def refined_views(views: list[View], obj: DetectedObject, plane: TablePlane, con
 
 def reconstruct(views: list[View], obj: DetectedObject, plane: TablePlane, config: Config,
                 refine: bool | None = None) -> Reconstruction:
+    views = views_seeing(views, obj, config)
     if not views:
         raise ValueError("No views to reconstruct from")
     survey_obj = obj
