@@ -30,7 +30,7 @@ from .calibrate import apply_mount
 from .config import Config
 from .measure import compare, identify, measure
 from .pipeline import apply_session_calibration, scanned_object
-from .progression import measured_share, roughness, spread_order
+from .progression import final_roughness, measured_share, roughness, spread_order
 from .reconstruct import reconstruct
 from .rgbd import load_views
 from .scene import DetectedObject, TablePlane
@@ -126,6 +126,9 @@ def evaluate(result, truth_name: str | None, truth: dict, root: Path) -> tuple[d
         "views_disagree_mm": report["median_single_view_deviation_mm"],
         "alignment_rejected": sum(v["rejected"] for v in registration),
         "roughness_mm": roughness(np.asarray(observed.vertices)) if len(observed.vertices) else None,
+        # The same measure on the final, closed mesh (only where it lies on measured data).
+        "roughness_final_mm": (final_roughness(mesh, np.asarray(result.cloud.points))
+                               if report["mesh"]["closed"] and len(result.cloud.points) else None),
         "observed_triangles": len(observed.triangles),
         "closed": bool(report["mesh"]["closed"]),
         "volume_cm3": report["mesh"]["volume_mm3"] / 1000 if report["mesh"]["volume_mm3"] else None,
@@ -162,7 +165,8 @@ def evaluate(result, truth_name: str | None, truth: dict, root: Path) -> tuple[d
 # The figure's columns show these, in order, when present.
 FIGURE_METRICS = [("cad_median_mm", "CAD error {:.2f}mm (median)"), ("cad_bias_mm", "CAD bias {:+.2f}mm"),
                   ("mean_size_error_pct", "size error {:.1f}%"), ("views_disagree_mm", "views disagree {:.2f}mm"),
-                  ("roughness_mm", "roughness {:.3f}mm"), ("measured_share", "{:.0%} measured")]
+                  ("roughness_final_mm", "final mesh roughness {:.3f}mm"), ("roughness_mm", "measured surface roughness {:.3f}mm"),
+                  ("measured_share", "{:.0%} measured")]
 # The takeaway ranks variants by the first of these that every row has (lower is better).
 RANKING = [("cad_median_mm", "error against the CAD model", "{:.2f}mm"), ("mean_size_error_pct", "size error", "{:.1f}%"),
            ("views_disagree_mm", "how much the views disagree", "{:.2f}mm")]
@@ -229,7 +233,7 @@ def write_results(rows: list[dict], out: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     (out / "results.json").write_text(json.dumps(rows, indent=2))
-    shown = ["label", "views", "views_disagree_mm", "roughness_mm", "measured_share", "mean_size_error_pct",
+    shown = ["label", "views", "views_disagree_mm", "roughness_mm", "roughness_final_mm", "measured_share", "mean_size_error_pct",
              "cad_median_mm", "cad_bias_mm", "seconds"]
     shown = [k for k in shown if any(row.get(k) is not None for row in rows)]
     lines = ["| " + " | ".join(shown) + " |", "|" + "---|" * len(shown)]

@@ -121,6 +121,16 @@ def measured_share(mesh: o3d.geometry.TriangleMesh, measured: np.ndarray) -> flo
     return float(np.isfinite(gaps).mean())
 
 
+def final_roughness(mesh: o3d.geometry.TriangleMesh, measured: np.ndarray) -> float:
+    ''' Roughness of the closed mesh, over the parts of it that lie on measured data (within
+    2mm): the filled-in bottom and walls are smooth by construction, so they'd flatter it. '''
+    if len(mesh.triangles) == 0 or len(measured) == 0:
+        return float("nan")
+    samples = np.asarray(mesh.sample_points_uniformly(60000).points)
+    gaps, _ = cKDTree(measured).query(samples, distance_upper_bound=COMPLETENESS_TOLERANCE)
+    return roughness(samples[np.isfinite(gaps)])
+
+
 def progression(views: list[View], obj: DetectedObject, plane: TablePlane, config: Config, folder: Path,
                 counts: list[int] | None = None, order: str = "spread", refine: bool | None = None,
                 truth: o3d.geometry.TriangleMesh | None = None, min_views: int | None = None) -> list[dict]:

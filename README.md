@@ -123,7 +123,7 @@ No amount of smoothing can fix a view that is in the wrong place, and this part 
 - **Averaging:** a [truncated signed distance function](https://en.wikipedia.org/wiki/Signed_distance_function) (TSDF) averages every view's depth in 1.5mm voxels ([§5.7](#57-fusing-the-views-tsdf)); its zero crossing is the surface. Most of the "smoothing" happens here, as averaging, rather than as smoothing a rough mesh afterward.
 - **Resolution:** the voxel size sets the mesh's resolution. Smaller voxels keep more detail but average fewer readings each.
 - **What to keep:** surface seen by fewer than 2 views is dropped as untrustworthy.
-- **Light smoothing** (5 Taubin steps) removes leftover ripple without shrinking the mesh.
+- **Light smoothing** (5 Taubin steps) removes leftover ripple from the measured surface (`observed.obj`) without shrinking it. The final, closed mesh (`mesh.obj`) is built from the fused points before that step, so its smoothness comes from the fusion's averaging and from Poisson reconstruction ([§5.8](#58-closing-the-mesh-with-a-flat-bottom)).
 - **Sharp edges** get rounded by about one voxel: the synthetic box's error is 0.25mm against the cylinder's 0.07mm.
 - **Filling what was never seen** needs a best guess. Here that is a flat bottom and straight walls, joined to the measured surface by Poisson reconstruction, which continues it smoothly across gaps ([§5.8](#58-closing-the-mesh-with-a-flat-bottom)).
 
@@ -788,7 +788,7 @@ The table below lists the settings that most change how smooth and how accurate 
 | Setting | Now | What it trades | How chosen |
 |---|---|---|---|
 | `capture.frames_per_view` | 5 | More frames: less per-pixel noise (median), slower views | **real** (below) |
-| `views.standoff` † | 280mm + object radius | Closer: more pixels on the object and less noise (it grows with distance²), but the camera can't measure closer than about 260mm | judgment |
+| `views.standoff` † | 320mm + object radius | Closer: more pixels on the object and less noise (it grows with distance²), but the D435i's ideal range starts at 0.3m | **spec**: keeps every surface beyond 0.3m (the scans so far used 280mm, which put some surfaces at 276-300mm; a comparison is planned) |
 | `views.elevations_deg`, `views.azimuth_step_deg`, `--max-views` | 10/15/25/50/72°, 30° (61 candidates) | More views: more averaging and coverage, longer scans | **real**: 16 spread views measured every side ([§3.2](#32-scanning-an-object-with-multiple-views)) |
 | `reconstruct.edge_grow` † | 2px | Wider: removes more edge fattening, loses more wall data | **real**: 32.62 → 32.22mm diameter at 2px, nothing gained beyond |
 | `reconstruct.voxel` † | 1.5mm | Smaller: finer detail and sharper edges, but fewer readings per voxel (noisier) and more memory | judgment |
@@ -990,7 +990,8 @@ The [Quick Start](#quick-start) covers the shortest path. This section has every
 
 ### 9.1 Prerequisites
 
-- Python 3.14 with the packages in [`requirements.txt`](requirements.txt) (Viam SDK, Open3D 0.20, NumPy, SciPy). `cairosvg` is optional, for PNG copies of figures.
+- Python 3.14 with the packages in [`requirements.txt`](requirements.txt) (Viam SDK, Open3D 0.20, PyMeshLab, NumPy, SciPy). `cairosvg` is optional, for PNG copies of figures.
+- The hardware used here: a **UFactory 850** arm, and an **Intel RealSense D435i** depth camera on its wrist, at 1280 × 720. Intel specifies the D435i's depth accuracy as under 2% at 2m, its ideal range as 0.3-3m, and its minimum depth as about 28cm at this resolution ([Intel's specifications](https://www.intel.com/content/www/us/en/products/sku/190004/intel-realsense-depth-camera-d435i/specifications.html)). Against the calibration board, flat-surface depth measured within about 0.5mm at 0.26-0.5m ([§5.5](#55-camera-calibration)).
 - A Viam machine with an arm, a depth camera whose frame is attached to the arm, the builtin motion service, and the work area's static obstacles (table, walls) as geometry in the frame system.
 
 ### 9.2 Machine Configuration
@@ -1004,7 +1005,7 @@ The [Quick Start](#quick-start) covers the shortest path. This section has every
 | `[workspace] survey_height, survey_spacing` | 600mm, 340mm | overhead grid over the search region |
 | `[workspace] min_base_distance` | 350mm | the arm's base and the cables around it are ignored (default 200mm); an object centered past it keeps its points up to 100mm closer |
 | `[machine] camera_mount_file` | `calibration/<rig>_camera_mount.json` | the calibrated camera mount; the app's camera frame is display-only |
-| `[views] standoff` | 280mm | beyond the RealSense's ~260mm minimum range |
+| `[views] standoff` | 320mm | keeps the nearest surface beyond the D435i's 0.3m minimum |
 | `[views] min_camera_height` | 60mm | views that would bring the camera lower above the table are skipped |
 | `[capture]` | settle 0.6s, 5 frames | |
 
@@ -1450,3 +1451,61 @@ Replaced by the seen-only rule with a cap on unseen table, after the survey reje
 > - not in open table: less than 90% of a ring 5-60mm around its footprint is bare table (within 5mm of the plane). That rules out cords at the table's edge, things in a gap between tables, and things beside a power strip. It also means two objects closer than about 60mm reject each other.
 
 > On the armfarm14 table, the survey found 10 things above the table: the three blocks, the arm's base and its cables, a clamp-on power strip at the table's edge, and cords. The rules above keep exactly the three blocks.
+
+---
+
+## Temp Section - temp-important-results
+
+*Results from comparisons that aren't written up in the sections above yet, collected 2026-11-03 for review. Size errors are against the average caliper measurements (cylinder errors from before 2026-11-03 converted to the new average); CAD errors are for the 3D-printed objects. Results folders are in `data/experiments/`.*
+
+**1. Turning alignment off helps the toy objects but hurts the 3D-printed block** (E1, 2026-10-29, 34-view 5-frame scans; `20261029-1857..1902-E1-align-edge-*`). This complicates the open question about alignment in §3.4 and §6.4.
+
+| Object | Alignment on | Alignment off |
+|---|---|---|
+| Orange block (width, length) | +3.9, +4.0mm | **+2.2, +2.2mm** |
+| Green cylinder (diameter) | +2.5mm | **+1.2mm** |
+| 3D-printed block (width, length; CAD bias) | **+0.6, +1.4mm; −0.41mm** | +1.6, +2.8mm; −0.29mm |
+
+With alignment off, the views disagree almost twice as much (0.57 → 1.0mm) and the measured surface is rougher on every object. On the full scans (§6.4), alignment off helped the orange block a lot (+4.4 → +0.7mm) and the cylinder less (+4.4 → +3.3mm).
+
+**2. Leaving grazing readings out of the alignment makes the toy objects smaller, and the printed block more accurate in size but worse in shape** (E7, `align_max_incidence_deg`, same scans; `...-E7-align-incidence-*`). The alignment only uses readings that see the surface within the given angle; fusion still uses everything.
+
+| Limit | Orange block | Green cylinder | 3D-printed block (width, length; CAD median, bias) |
+|---|---|---|---|
+| 90° (the default: no limit) | +3.9, +4.0mm | +2.5mm | +0.5, +1.5mm; 0.89mm, −0.54mm |
+| 75° | +3.4, +3.6mm | +2.1mm | +0.0, +1.5mm; 1.02mm, −0.59mm |
+| 60° | **+3.2, +3.2mm** | **+2.1mm** | −0.4, +0.6mm; 1.18mm, −0.72mm |
+| 45° | +3.4, +3.5mm | +2.2mm | +0.1, +0.2mm; 1.24mm, −0.79mm |
+
+**3. A narrower TSDF truncation band is more accurate, at the cost of noise and some holes** (E3; `...-E3-voxel-trunc-*`). With 1.5mm voxels, a 3mm band (vs. the default 6mm) took the cylinder from +2.5 to +2.0mm and the block from +3.9, +4.0 to +3.3, +3.3mm, and the heights 0.2mm closer. The measured surface's roughness rose 10-15%, and the block's measured share fell from 88% to 80%. A 9mm band was worse on every count. *Being re-run on the full scans, the bowl, the mug and the cup (2026-11-03).*
+
+**4. Smoothing the measured surface with Laplacian instead of Taubin makes it much smoother without changing the size** (E4; `...-E4-mesh-*`): measured-surface roughness 0.12 → 0.09mm (block), 0.13 → 0.09mm (cylinder), 0.25 → 0.18mm (printed block), with size errors within 0.1mm. The final, closed mesh isn't smoothed at all (only the measured surface is), so it wasn't affected. The closing method (flat bottom vs. plain Poisson) changed nothing measurable on these objects.
+
+**5. The full scans are less accurate than the older, lower-view scans of the same objects.** Green cylinder: +2.44mm (25 views, 2026-10-26) and +2.50mm (34 views, 2026-10-28) vs. +4.60mm (50 views, 2026-11-03, full scan). Orange block: +3.8, +4.0mm (34 views) and +3.7, +3.8mm (39 views, 50 frames) vs. +4.4, +4.7mm (49 views, full scan). The full scans added the 10° and 15° rings; rebuilding a full scan without its lowest views would show whether those views make objects wider.
+
+**6. More frames per view don't make objects more accurate** (E5, the orange block's 39-view full scan of 2026-10-29): 1 frame gave a 6.6% size error, 5-50 frames 8.6-9.0%, while the roughness fell from 0.143 to 0.108mm. The same as on the 2026-11-02 full scan (§6.4).
+
+**7. The stray points far outside an object are mostly the table's color** (the orange block's full scan): 73% of the wall points more than 5mm outside the true outline aren't orange, but 97% of all wall points are, and they still sit a median 1.5mm too far out. So color could remove strays, but not the size error.
+
+**8. The cup and mug against the new caliper measurements** (their 5-frame scans of 2026-10-30): both come out short (cup 56.0mm vs. 57.0mm, mug 94.3mm vs. 95.9mm). The cup's rim is 76.2mm across vs. 72.7mm (+1.75mm per side, like the other objects). At its lowest visible height (6-12mm up) the cup is 66mm across, far from the roughly 48mm traced around its base: probably a narrower foot that no view can see.
+
+**9. Rebuilding the same scan with identical settings varies by about ±0.15mm in diameter** (the table fit and the GPU fusion aren't perfectly repeatable), so differences smaller than about 0.3mm between settings aren't meaningful.
+
+**10. The new caliper averages didn't change any decision** (2026-11-03): re-scoring all 36 saved comparisons of the orange block and green cylinder against the new averages left every ranking the same, because every setting overestimates the size.
+
+**11. Glossy surfaces read too far away** (the mug, 2026-10-30; `20261030-mug-reflections/`): reflections on the glossy mug put some surface behind where it really is. Leaving out the views most affected changed the mesh (`mug_compare.png`), but there's no general fix yet (matte spray, a different camera, or skipping views).
+
+**12. Smoothing methods on the final mesh** (2026-11-03, the full scans; `...-smooth-final-*`). Each method applied with 5 steps to the final mesh; "none" is how the final mesh was built until now (not smoothed):
+
+| Method | Final-mesh roughness (block / cylinder / bowl) | Block width, length / height | Cylinder diameter / height | Bowl: CAD median / bias / height |
+|---|---|---|---|---|
+| none | 0.092 / 0.095 / 0.229mm | +4.40, +4.72 / +1.08mm | +4.74 / +1.22mm | 1.10 / +0.43 / +1.38mm |
+| taubin | 0.088 / 0.092 / 0.219mm | +4.36, +4.72 / +1.14mm | +4.40 / +1.23mm | 1.11 / +0.45 / +1.64mm |
+| laplacian | 0.071 / 0.082 / 0.174mm | +4.25, +4.65 / +0.99mm | +4.55 / +1.11mm | 1.07 / +0.40 / +1.04mm |
+| simple | 0.067 / 0.076 / 0.140mm | +4.20, +4.61 / +0.94mm | +4.59 / +1.13mm | 1.06 / +0.35 / +0.93mm |
+| hc_laplacian | 0.064 / 0.076 / 0.140mm | +4.18, +4.61 / +0.95mm | +4.27 / +1.07mm | 1.07 / +0.39 / +0.89mm |
+| cotangent_laplacian | 0.074 / 0.079 / 0.166mm | +4.28, +4.63 / +0.96mm | +4.62 / +1.15mm | 1.06 / +0.40 / +0.92mm |
+| two_step | 0.069 / 0.083 / 0.128mm | +4.89, +5.07 / +2.16mm | +4.30 / +2.35mm | 1.07 / +0.40 / +4.31mm |
+| scale_dependent | 0.086 / 0.093 / broke the mesh | +4.35, +4.70 / +1.07mm | +4.61 / +1.18mm | – |
+
+HC Laplacian and `simple` smooth the final mesh the most (30-39% less rough) and slightly improve accuracy, without adding anything (the bowl's CAD error and bias both go down slightly). Taubin, the method used so far, barely smooths at 5 steps. `two_step` makes every object 1-3mm taller (an added feature), and `scale_dependent` destroyed the bowl's mesh. Size differences under about 0.3mm are within rebuild noise.

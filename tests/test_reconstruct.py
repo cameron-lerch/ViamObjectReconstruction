@@ -47,3 +47,23 @@ def test_a_view_that_misses_the_object_is_left_out():
     integrate(grid, view, view.T_world_cam, obj, plane, config)  # must not raise
     assert grid.hashmap().size() == 0  # nothing was added
     assert views_seeing([view], obj, config) == []  # left out before alignment too
+
+
+def test_every_smoother_runs_keeps_the_mesh_and_smooths_it():
+    # Guards reconstruct.SMOOTHERS (Open3D and PyMeshLab): a library update could silently break
+    # a method, or one could quietly do nothing, as PyMeshLab's surface-preserving filter did.
+    import open3d as o3d
+    from recon.progression import roughness
+    from recon.reconstruct import SMOOTHERS, smooth
+    sphere = o3d.geometry.TriangleMesh.create_sphere(20, 60)
+    points = np.asarray(sphere.vertices)
+    noise = np.random.default_rng(0).normal(0, 0.15, (len(points), 1))
+    sphere.vertices = o3d.utility.Vector3dVector(points + points / np.linalg.norm(points, axis=1, keepdims=True) * noise)
+    before = roughness(np.asarray(sphere.vertices))
+    settings = Config().reconstruct
+    for name in SMOOTHERS:
+        settings.smoothing = name
+        smoothed = smooth(o3d.geometry.TriangleMesh(sphere), settings)
+        assert len(smoothed.vertices) == len(sphere.vertices) and len(smoothed.triangles) == len(sphere.triangles)
+        if name != "none":
+            assert roughness(np.asarray(smoothed.vertices)) < 0.8 * before, name

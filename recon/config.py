@@ -111,9 +111,12 @@ class CameraConfig:
 
 @dataclass
 class ViewConfig:
-    # Distance from the camera to the nearest point of the object's bounding
-    # sphere. RealSense D4xx depth fails closer than about 260mm at 1280x720.
-    standoff: float = 280.0
+    # Distance from the camera to the nearest point of the object's bounding sphere.
+    # Intel specifies the D435i's ideal range as 0.3-3m (minimum depth about 280mm at
+    # 1280x720). At 280mm, the full scans put real surfaces 276-300mm from the camera
+    # (the green cylinder: all 50 views under 300mm, 17 under 280mm), so from 2026-11-03
+    # it's 320mm; earlier scans used 280mm, and a comparison of the two is planned.
+    standoff: float = 320.0
     # The 15deg ring sees below a rounded object's widest point (a sphere, a pumpkin);
     # added 2026-10-29 after the printed sphere and bowl scans.
     elevations_deg: list[float] = field(default_factory=lambda: [15.0, 25.0, 50.0, 72.0])
@@ -272,13 +275,23 @@ class ReconstructConfig:
     # every view outward (2026-10-29, the 34-view block: its surface moved 1.3mm toward each
     # camera on average, making it 1.7mm wider than with alignment off).
     align_max_incidence_deg: float = 90.0
-    # Taubin smoothing steps on the observed mesh (Taubin, unlike plain Laplacian
-    # smoothing, doesn't shrink the surface). On the real cylinder 5-15 steps and
-    # Poisson depth 7-9 all gave roughness 0.112-0.116mm, so the light end was kept.
+    # Smoothing steps (smoothing_iterations) and method (smoothing), applied to every mesh
+    # (smooth_target). Compared on the full scans of the orange block, green cylinder and
+    # bowl (2026-11-03, README section 6.4): HC Laplacian gave the least rough final meshes
+    # (30-39% less than unsmoothed) and the closest sizes to the calipers, without adding
+    # anything (the bowl's CAD error went down slightly). Taubin, used until then, barely
+    # smoothed at 5 steps. 5 steps is a judgment; more haven't been tried yet.
     smoothing_iterations: int = 5
-    # Which smoothing: "taubin" (keeps size), "laplacian" (plain averaging; shrinks the
-    # surface a little with every step) or "none".
-    smoothing: str = "taubin"
+    # Methods (reconstruct.SMOOTHERS). Open3D: "taubin" (keeps size), "laplacian" (plain
+    # averaging; shrinks the surface a little with every step), "simple" (average of the
+    # neighbors). PyMeshLab: "hc_laplacian" (Laplacian pulled back toward the original
+    # surface, so it shrinks less), "cotangent_laplacian" (weighted by the triangles' shapes),
+    # "two_step" (smooths the normals, then fits the vertices to them; it made every object
+    # 1-3mm taller, so it adds features). Or "none".
+    smoothing: str = "hc_laplacian"
+    # What gets smoothed: "both" (the measured surface, observed.obj, and the final closed
+    # mesh, mesh.obj, which is built from the fused points), "observed" or "final".
+    smooth_target: str = "both"
     # How the final mesh is closed. "flat_bottom": objects rest flat on the table, so the
     # bottom is filled flat and walls never seen drop from the lowest surface seen
     # (screened Poisson with those priors; see bottom.py). "poisson": screened Poisson

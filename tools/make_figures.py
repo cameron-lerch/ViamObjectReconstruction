@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from recon.config import Config, load_config  # noqa: E402
+from recon.experiment import safe_name  # noqa: E402
 from recon.figures import PANEL, color_measured, comparison_figure, facing_the_arm, framing, progression_figure, row_figure  # noqa: E402
 from recon.measure import compare, measure  # noqa: E402
 from recon.pipeline import scanned_object  # noqa: E402
@@ -138,6 +139,34 @@ def alignment_figure(old_session: Session) -> None:
                for az in (-60, 60)]
     figure("alignment_before_after", "Same 37 synthetic views, two ways of aligning them", panels,
            "Misaligned views average into ripples and double walls; well-aligned ones fuse into a smooth surface.")
+
+
+def variants_figure(experiment: Path, name: str, title: str, labels: dict[str, str], note: str = "",
+                    zoom: float = 0.6, lift: float = 0.45, elevation: float = 25.0, azimuth: float = -60.0) -> None:
+    ''' One saved comparison (tools/compare.py) as a row of renders: each variant's final mesh,
+    zoomed onto the top part of the object (where noise, rounded edges and added features
+    show), labeled with its own numbers. `labels` maps a variant's label to its panel name,
+    in panel order. '''
+    rows = {row["label"]: row for row in json.loads((experiment / "results.json").read_text())}
+    meshes = {label: o3d.io.read_triangle_mesh(str(experiment / safe_name(label) / "mesh.ply")) for label in labels}
+    reference = next(m for m in meshes.values() if len(m.triangles))
+    center, radius = framing(reference)
+    top = np.asarray(reference.vertices)[:, 2].max()
+    center = center + np.array([0.0, 0.0, lift * (top - center[2])])  # toward the top of the object
+    panels = []
+    for label, panel_name in labels.items():
+        row, mesh = rows[label], meshes[label]
+        mesh.compute_vertex_normals()
+        lines = []
+        if row.get("roughness_final_mm") is not None:
+            lines.append(f"roughness {row['roughness_final_mm']:.3f}mm")
+        if row.get("cad_median_mm") is not None:
+            lines.append(f"CAD {row['cad_median_mm']:.2f} / {row['cad_bias_mm']:+.2f}mm")
+        elif row.get("mean_size_error_pct") is not None:
+            lines.append(f"size +{row['mean_size_error_pct']:.1f}%")
+        image = render(mesh, PANEL, elevation, azimuth, center, zoom * radius, wire_boundary=False)
+        panels.append((image, panel_name, " · ".join(lines)))
+    figure(name, title, panels, note)
 
 
 def main() -> None:

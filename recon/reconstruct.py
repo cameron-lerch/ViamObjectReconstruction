@@ -13,8 +13,11 @@
    each raw view lies from the observed surface.
 '''
 
+import contextlib
 import json
 import logging
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -266,8 +269,73 @@ def fuse(views: list[View], poses: list[np.ndarray], obj: DetectedObject, planes
     return grid
 
 
+@contextlib.contextmanager
+def _quiet():
+    ''' Hide PyMeshLab's console output. It loads its plugins on first use and warns about the
+    optional ones that need OpenGL (rendering, file formats), none of which are used here. '''
+    sys.stdout.flush(), sys.stderr.flush()
+    saved = os.dup(1), os.dup(2)
+    with open(os.devnull, "w") as null:
+        os.dup2(null.fileno(), 1), os.dup2(null.fileno(), 2)
+        try:
+            yield
+        finally:
+            sys.stdout.flush(), sys.stderr.flush()
+            os.dup2(saved[0], 1), os.dup2(saved[1], 2)
+            os.close(saved[0]), os.close(saved[1])
+
+
+def _meshlab_smoother(apply):
+    ''' A PyMeshLab smoothing filter as a smoother: `apply(meshset, iterations)` moves the
+    vertices; triangles and colors are kept as they are. '''
+    def smooth(mesh: o3d.geometry.TriangleMesh, iterations: int) -> o3d.geometry.TriangleMesh:
+        with _quiet():
+            import pymeshlab  # only when one of its smoothers is used
+            meshset = pymeshlab.MeshSet()
+            meshset.add_mesh(pymeshlab.Mesh(vertex_matrix=np.asarray(mesh.vertices, dtype=np.float64),
+                                            face_matrix=np.asarray(mesh.triangles, dtype=np.int32)))
+            apply(meshset, iterations)
+            vertices = meshset.current_mesh().vertex_matrix()
+        smoothed = o3d.geometry.TriangleMesh(mesh)
+        smoothed.vertices = o3d.utility.Vector3dVector(vertices)
+        return smoothed
+    return smooth
+
+
+def _repeat(filter_name: str):
+    ''' A PyMeshLab filter with no step count, applied `iterations` times. '''
+    def apply(meshset, iterations):
+        for _ in range(iterations):
+            getattr(meshset, filter_name)()
+    return apply
+
+
+# Mesh smoothers by name ([reconstruct] smoothing): each takes a mesh and a number of steps.
+SMOOTHERS = {
+    "none": lambda mesh, iterations: mesh,
+    "taubin": lambda mesh, iterations: mesh.filter_smooth_taubin(iterations),
+    "laplacian": lambda mesh, iterations: mesh.filter_smooth_laplacian(iterations),
+    "simple": lambda mesh, iterations: mesh.filter_smooth_simple(iterations),
+    "hc_laplacian": _meshlab_smoother(_repeat("apply_coord_hc_laplacian_smoothing")),
+    "cotangent_laplacian": _meshlab_smoother(lambda ms, n: ms.apply_coord_laplacian_smoothing(
+        stepsmoothnum=n, cotangentweight=True)),
+    "two_step": _meshlab_smoother(lambda ms, n: ms.apply_coord_two_steps_smoothing(stepsmoothnum=n)),
+}
+
+
+def smooth(mesh: o3d.geometry.TriangleMesh, settings: ReconstructConfig) -> o3d.geometry.TriangleMesh:
+    ''' The mesh smoothed with `[reconstruct] smoothing` (SMOOTHERS), `smoothing_iterations` steps. '''
+    if settings.smoothing not in SMOOTHERS:
+        raise ValueError(f"Unknown smoothing {settings.smoothing!r}: {', '.join(SMOOTHERS)}")
+    if len(mesh.triangles) == 0 or not settings.smoothing_iterations:
+        return mesh
+    mesh = SMOOTHERS[settings.smoothing](mesh, settings.smoothing_iterations)
+    mesh.compute_vertex_normals()
+    return mesh
+
+
 def clean_mesh(mesh: o3d.geometry.TriangleMesh, settings: ReconstructConfig) -> o3d.geometry.TriangleMesh:
-    ''' Drop small floating fragments and lightly smooth what remains. '''
+    ''' Drop small floating fragments, and smooth what remains if `smooth_target` says so. '''
     if len(mesh.triangles) == 0:
         return mesh
     labels, counts, _ = mesh.cluster_connected_triangles()
@@ -275,12 +343,10 @@ def clean_mesh(mesh: o3d.geometry.TriangleMesh, settings: ReconstructConfig) -> 
     small = counts < settings.min_component_fraction * counts.max()
     mesh.remove_triangles_by_mask(small[labels])
     mesh.remove_unreferenced_vertices()
-    if settings.smoothing_iterations and settings.smoothing == "taubin":
-        mesh = mesh.filter_smooth_taubin(settings.smoothing_iterations)
-    elif settings.smoothing_iterations and settings.smoothing == "laplacian":
-        mesh = mesh.filter_smooth_laplacian(settings.smoothing_iterations)
-    elif settings.smoothing not in ("taubin", "laplacian", "none"):
-        raise ValueError(f"Unknown smoothing {settings.smoothing!r}: taubin, laplacian or none")
+    if settings.smooth_target not in ("observed", "final", "both"):
+        raise ValueError(f"Unknown smooth_target {settings.smooth_target!r}: observed, final or both")
+    if settings.smooth_target in ("observed", "both"):
+        return smooth(mesh, settings)
     mesh.compute_vertex_normals()
     return mesh
 
@@ -351,6 +417,9 @@ def build_mesh(views: list[View], poses: list[np.ndarray], planes: list[TablePla
         mesh = observed
     else:
         raise ValueError(f"Unknown closing {settings.closing!r}: flat_bottom, poisson or none")
+    if settings.smooth_target in ("final", "both"):
+        # The closed mesh is built from the fused points, not from the smoothed observed surface.
+        mesh = smooth(mesh if settings.closing != "none" else o3d.geometry.TriangleMesh(mesh), settings)
     return FusedMesh(observed, mesh, cloud, table)
 
 

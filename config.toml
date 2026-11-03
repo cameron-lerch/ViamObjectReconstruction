@@ -23,7 +23,7 @@ y_range = [-650, 350]
 # visiting every reachable point. To use fixed positions instead: survey_positions = [[x, y, z], ...]
 
 [views]
-standoff = 280               # camera to nearest point of the object
+standoff = 320               # camera to the nearest point of the object's bounding sphere (the D435i's ideal minimum is 0.3m; scans before 2026-11-03 used 280)
 elevations_deg = [10, 15, 25, 50, 72]   # the 10deg ring asks first (confirm_below_deg)
 azimuth_step_deg = 30
 min_coverage = 0.85          # below this, the object is moved to a scan station
