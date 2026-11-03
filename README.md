@@ -123,7 +123,7 @@ No amount of smoothing can fix a view that is in the wrong place, and this part 
 - **Averaging:** a [truncated signed distance function](https://en.wikipedia.org/wiki/Signed_distance_function) (TSDF) averages every view's depth in 1.5mm voxels ([§5.7](#57-fusing-the-views-tsdf)); its zero crossing is the surface. Most of the "smoothing" happens here, as averaging, rather than as smoothing a rough mesh afterward.
 - **Resolution:** the voxel size sets the mesh's resolution. Smaller voxels keep more detail but average fewer readings each.
 - **What to keep:** surface seen by fewer than 2 views is dropped as untrustworthy.
-- **Light smoothing** (5 Taubin steps) removes leftover ripple from the measured surface (`observed.obj`) without shrinking it. The final, closed mesh (`mesh.obj`) is built from the fused points before that step, so its smoothness comes from the fusion's averaging and from Poisson reconstruction ([§5.8](#58-closing-the-mesh-with-a-flat-bottom)).
+- **Light smoothing** (5 steps of HC Laplacian) on every mesh, both the measured surface (`observed.obj`) and the final, closed mesh (`mesh.obj`), removes the ripple the averaging leaves behind ([§5.9](#59-smoothing-the-mesh)).
 - **Sharp edges** get rounded by about one voxel: the synthetic box's error is 0.25mm against the cylinder's 0.07mm.
 - **Filling what was never seen** needs a best guess. Here that is a flat bottom and straight walls, joined to the measured surface by Poisson reconstruction, which continues it smoothly across gaps ([§5.8](#58-closing-the-mesh-with-a-flat-bottom)).
 
@@ -158,9 +158,9 @@ Every figure in this README is labeled under its caption so it's clear where it 
 
 These are all of the objects I've scanned so far, each from its most recent scan. For each one, the left panel is the final mesh, colored from the camera's images, and the right panel is the cumulative point cloud: every view's points on the object, placed by the aligned camera poses, without the ring of table around its base.
 
-Every mesh below was rebuilt with the current pipeline, so they compare directly: a TSDF with 1.5mm voxels, surface seen by at least 2 views, 5 Taubin smoothing steps, and a flat-bottom Poisson closing ([§5.7](#57-fusing-the-views-tsdf), [§5.8](#58-closing-the-mesh-with-a-flat-bottom)). Full scans capture 50 frames per view; the others capture 5. In each table:
+Every mesh below was rebuilt with the current pipeline, so they compare directly: a TSDF with 1.5mm voxels, surface seen by at least 2 views, a flat-bottom Poisson closing, and 5 steps of HC Laplacian smoothing on every mesh ([§5.7](#57-fusing-the-views-tsdf), [§5.8](#58-closing-the-mesh-with-a-flat-bottom), [§5.9](#59-smoothing-the-mesh)). Full scans capture 50 frames per view; the others capture 5. In each table:
 
-- **Roughness** is how bumpy the measured surface is at a small scale: the typical distance of the surface from a flat plane fit over each 3mm patch. Lower is smoother. It also counts real curvature and fine detail, so it's only meaningful between objects of a similar shape.
+- **Roughness** is how bumpy the surface is at a small scale: the typical distance of the surface from a flat plane fit over each 3mm patch. It's given for the observed surface (observed.obj) and for the measured parts of the final mesh (mesh.obj) ([§6.2](#62-measured-vs-filled-in-observedobj-and-meshobj)). Lower is smoother. It also counts real curvature and fine detail, so it's only meaningful between objects of a similar shape.
 - **Measured** is how much of the final, closed mesh's surface was actually measured by the camera (seen by at least 2 views), rather than filled in by the closing. The rest is the bottom, which no view can see, and any walls the camera couldn't reach ([§6.2](#62-measured-vs-filled-in-observedobj-and-meshobj)).
 - **Accuracy** compares the mesh with the average of many caliper measurements or, for the 3D-printed objects, with their CAD models. The CAD error is each measured point's distance from the true surface after the best rigid fit, and the bias is its signed average (positive means too big).
 
@@ -168,65 +168,65 @@ Every mesh below was rebuilt with the current pipeline, so they compare directly
   <img src="media/images/objects/orange_block.png" alt="Orange block: the final colored mesh on the left, and the cumulative point cloud from all of its views on the right" width="1000">
 </p>
 
-| Views × Frames Captured per View | Roughness | Measured | Volume | Accuracy | Notes |
+| Views × Frames Captured per View | Roughness (Observed / Final) | Measured | Volume | Accuracy | Notes |
 |---|---|---|---|---|---|
-| 49 × 50 | 0.090mm | 86% | 63.5cm³ | Calipers: +4.4, +4.7mm wide, +1.0mm tall | Full scan. Too wide on every side ([§3.5](#35-the-real-cylinder-against-calipers)) |
+| 49 × 50 | 0.077 / 0.062mm | 87% | 62.8cm³ | Calipers: +4.2, +4.6mm wide, +0.9mm tall | Full scan. Too wide on every side ([§3.5](#35-the-real-cylinder-against-calipers)) |
 
 <p align="center">
   <img src="media/images/objects/green_cylinder.png" alt="Green cylinder: the final colored mesh on the left, and the cumulative point cloud from all of its views on the right" width="1000">
 </p>
 
-| Views × Frames Captured per View | Roughness | Measured | Volume | Accuracy | Notes |
+| Views × Frames Captured per View | Roughness (Observed / Final) | Measured | Volume | Accuracy | Notes |
 |---|---|---|---|---|---|
-| 50 × 50 | 0.098mm | 87% | 55.2cm³ | Calipers: +4.6mm diameter, +1.2mm tall | Full scan |
+| 50 × 50 | 0.074 / 0.076mm | 87% | 53.6cm³ | Calipers: +4.2mm diameter, +1.1mm tall | Full scan |
 
 <p align="center">
   <img src="media/images/objects/printed_block.png" alt="3D-printed block: the final colored mesh on the left, and the cumulative point cloud from all of its views on the right" width="1000">
 </p>
 
-| Views × Frames Captured per View | Roughness | Measured | Volume | Accuracy | Notes |
+| Views × Frames Captured per View | Roughness (Observed / Final) | Measured | Volume | Accuracy | Notes |
 |---|---|---|---|---|---|
-| 34 × 5 | 0.247mm | 84% | 87.9cm³ | CAD: 0.91mm median error, −0.53mm bias; +0.6, +1.5mm wide | Rougher, but much closer to its true size than the orange block |
+| 34 × 5 | 0.131 / 0.146mm | 83% | 88.2cm³ | CAD: 0.79mm median error, −0.51mm bias; +0.6, +1.2mm wide | Rougher, but much closer to its true size than the orange block |
 
 <p align="center">
   <img src="media/images/objects/printed_sphere.png" alt="3D-printed sphere: the final colored mesh on the left, and the cumulative point cloud from all of its views on the right" width="1000">
 </p>
 
-| Views × Frames Captured per View | Roughness | Measured | Volume | Accuracy | Notes |
+| Views × Frames Captured per View | Roughness (Observed / Final) | Measured | Volume | Accuracy | Notes |
 |---|---|---|---|---|---|
-| 34 × 5 | 0.417mm | 73% | 80.1cm³ | CAD: 2.69mm median error, −1.10mm bias | Little of its lower half was measured, so the closing had to guess much of it |
+| 34 × 5 | 0.179 / 0.242mm | 73% | 81.1cm³ | CAD: 2.69mm median error, −1.10mm bias | Little of its lower half was measured, so the closing had to guess much of it |
 
 <p align="center">
   <img src="media/images/objects/printed_bowl.png" alt="3D-printed bowl: the final colored mesh on the left, and the cumulative point cloud from all of its views on the right" width="1000">
 </p>
 
-| Views × Frames Captured per View | Roughness | Measured | Volume | Accuracy | Notes |
+| Views × Frames Captured per View | Roughness (Observed / Final) | Measured | Volume | Accuracy | Notes |
 |---|---|---|---|---|---|
-| 43 × 50 | 0.315mm | 89% | 159.4cm³ | CAD: 1.09mm median error, +0.42mm bias; +3.5mm across the rim, +1.5mm tall | Full scan, upright |
+| 43 × 50 | 0.135 / 0.134mm | 88% | 155.8cm³ | CAD: 1.03mm median error, +0.31mm bias; +2.5mm across the rim, +0.8mm tall | Full scan, upright |
 
 <p align="center">
   <img src="media/images/objects/pumpkin.png" alt="Pumpkin: the final colored mesh on the left, and the cumulative point cloud from all of its views on the right" width="1000">
 </p>
 
-| Views × Frames Captured per View | Roughness | Measured | Volume | Accuracy | Notes |
+| Views × Frames Captured per View | Roughness (Observed / Final) | Measured | Volume | Accuracy | Notes |
 |---|---|---|---|---|---|
-| 34 × 5 | 0.086mm | 70% | 2,636cm³ | No ground truth | The largest object; the side away from the arm is hard to reach ([§5.8](#58-closing-the-mesh-with-a-flat-bottom)) |
+| 34 × 5 | 0.036 / 0.034mm | 70% | 2,633cm³ | No ground truth | The largest object; the side away from the arm is hard to reach ([§5.8](#58-closing-the-mesh-with-a-flat-bottom)) |
 
 <p align="center">
   <img src="media/images/objects/mug.png" alt="Mug: the final colored mesh on the left, and the cumulative point cloud from all of its views on the right" width="1000">
 </p>
 
-| Views × Frames Captured per View | Roughness | Measured | Volume | Accuracy | Notes |
+| Views × Frames Captured per View | Roughness (Observed / Final) | Measured | Volume | Accuracy | Notes |
 |---|---|---|---|---|---|
-| 41 × 5 | 0.194mm | 87% | 175.2cm³ | No ground truth | Glossy, so reflections read some surfaces too far away |
+| 41 × 5 | 0.089 / 0.084mm | 88% | 174.9cm³ | No ground truth | Glossy, so reflections read some surfaces too far away |
 
 <p align="center">
   <img src="media/images/objects/cup.png" alt="Cup: the final colored mesh on the left, and the cumulative point cloud from all of its views on the right" width="1000">
 </p>
 
-| Views × Frames Captured per View | Roughness | Measured | Volume | Accuracy | Notes |
+| Views × Frames Captured per View | Roughness (Observed / Final) | Measured | Volume | Accuracy | Notes |
 |---|---|---|---|---|---|
-| 39 × 5 | 0.161mm | 87% | 74.4cm³ | No ground truth | Open top; its walls are tucked in below the rim ([§5.8](#58-closing-the-mesh-with-a-flat-bottom)) |
+| 39 × 5 | 0.070 / 0.075mm | 88% | 72.5cm³ | No ground truth | Open top; its walls are tucked in below the rim ([§5.8](#58-closing-the-mesh-with-a-flat-bottom)) |
 
 `python tools/make_object_gallery.py` rebuilds these images and numbers.
 
@@ -510,7 +510,7 @@ Each survey view costs a move, 0.6s to settle, one color-only frame to read the 
 ### 5.2 View planning and reachability
 
 <p align="center">
-  <img src="media/diagrams/view_planning.png" alt="Side view: a top view plus rings at 72°, 50°, 25° and 15° elevation around the object, all aimed at a point 40% up the object, at a standoff of 280mm plus the object's radius; 49 candidates; no view puts the camera under 80mm above the table" width="900">
+  <img src="media/diagrams/view_planning.png" alt="Side view, to scale, of a 30 × 30 × 60mm block: a top view plus rings at 72°, 50°, 25°, 15° and 10° elevation, all aimed at a point 40% up the object from 320mm plus the object's radius (357mm here); 61 candidates; no camera below 60mm above the table; the scan asks before the 10° ring" width="900">
   <br><sub><b>DIAGRAM.</b> The planned view layout (the layout used on the arm)</sub>
 </p>
 
@@ -694,6 +694,28 @@ Each view's depth map is then cropped to the object: inside its box (plus 12mm),
 
 The surface that comes out of fusion is `observed.obj`. Everything in it was measured, and it's open wherever nothing was seen.
 
+**The voxel size and the truncation band** are the fusion's two main settings. Smaller voxels keep finer detail, but each one averages fewer readings, so the surface gets noisier. The truncation band sets how far from its reading each view updates the grid: a wide band lets views that disagree by a millimeter or two still overlap and average, but it also lets the two sides of a thin wall overwrite each other; a narrow band keeps thin walls apart, but leaves gaps wherever the views disagree by more than the band. The figures below show both on the orange block (solid) and the 3D-printed bowl (a wall a few millimeters thick). The numbers are in [§6.4](#64-what-can-be-tuned). *From the full scans at the 280mm standoff; to be updated after the 320mm re-scans.*
+
+<p align="center">
+  <img src="media/images/tsdf_truncation_orange_block.png" alt="The orange block's final mesh with truncation bands of 2, 3, 4.5, 6 and 9mm: all similar, slightly rougher at 2mm" width="1000">
+  <br><sub><b>REAL DATA.</b> The orange block's full scan, rebuilt with each truncation band</sub>
+</p>
+
+<p align="center">
+  <img src="media/images/tsdf_truncation_bowl.png" alt="The bowl's final mesh with truncation bands of 2, 3, 4.5, 6 and 9mm: at 2 and 3mm the wall falls apart into fragments, at 4.5 and 6mm it holds together, at 9mm it thickens" width="1000">
+  <br><sub><b>REAL DATA.</b> The bowl's full scan, rebuilt with each truncation band</sub>
+</p>
+
+<p align="center">
+  <img src="media/images/tsdf_voxel_orange_block.png" alt="The orange block's final mesh with 1.0, 1.5 and 2.0mm voxels: rougher at 1.0mm" width="760">
+  <br><sub><b>REAL DATA.</b> The orange block's full scan, rebuilt with each voxel size</sub>
+</p>
+
+<p align="center">
+  <img src="media/images/tsdf_voxel_bowl.png" alt="The bowl with 1.0, 1.5 and 2.0mm voxels: at 1.0mm the closing balloons into a blob; at 1.5mm it works; at 2.0mm the closing fails and only the measured surface, with holes, is shown" width="760">
+  <br><sub><b>REAL DATA.</b> The bowl's full scan, rebuilt with each voxel size</sub>
+</p>
+
 ### 5.8 Closing the mesh with a flat bottom
 
 The camera can never see under an object, so the measured surface is always open at the bottom. Because the objects rest flat on the table, I fill in what wasn't seen with two assumptions (priors):
@@ -713,6 +735,26 @@ The final `mesh.obj` is a screened Poisson surface fit through the observed surf
 
 ---
 
+### 5.9 Smoothing the mesh
+
+Fusion averages away most of the sensor noise, but some ripple remains, so every mesh is smoothed: the measured surface (`observed.obj`) and the final, closed mesh (`mesh.obj`), which is built from the fused points. I use 5 steps of **HC Laplacian** smoothing ([PyMeshLab](https://pymeshlab.readthedocs.io/)): like plain Laplacian smoothing it moves each vertex toward its neighbors, but it then pulls each vertex part of the way back toward where it started, so the mesh shrinks much less.
+
+The main risk with any smoothing is changing the object itself: rounding off edges that are really there, or creating features that aren't. So I compared seven methods on the full scans, judging each on both how smooth the final mesh came out and how accurate it stayed against the calipers and the bowl's CAD model ([§6.4](#64-what-can-be-tuned)). HC Laplacian gave the smoothest final meshes and the most accurate sizes, and the bowl's error against its CAD model went slightly down, so it doesn't add anything. *From the full scans at the 280mm standoff; to be updated after the 320mm re-scans.*
+
+<p align="center">
+  <img src="media/images/smoothing_orange_block.png" alt="The orange block's final mesh with each smoothing method: no smoothing and Taubin look bumpy; Laplacian, simple average, HC Laplacian and cotangent Laplacian look smooth; two-step sharpens the edges into facets" width="1000">
+  <br><sub><b>REAL DATA.</b> The orange block's full scan, its final mesh smoothed with each method</sub>
+</p>
+
+<p align="center">
+  <img src="media/images/smoothing_bowl.png" alt="The bowl's final mesh with each smoothing method; every one shows the same holes through the thin wall, which come from fusion, not smoothing" width="1000">
+  <br><sub><b>REAL DATA.</b> The bowl's full scan, its final mesh smoothed with each method. The holes through its thin wall come from fusion (above), not from smoothing</sub>
+</p>
+
+The live viewer's preview mesh isn't smoothed, so that it stays fast ([§9.5](#95-watching-a-scan-live)).
+
+---
+
 ## 6. Evaluating and Tuning
 
 Building a mesh is only half of the job: I also needed to know how good each mesh is, and which settings make it better. This section covers how I measure quality, the difference between what was measured and what was filled in, the tool I use to compare settings, and what I've learned from tuning them so far.
@@ -723,7 +765,7 @@ Building a mesh is only half of the job: I also needed to know how good each mes
 
 | Metric | What it measures | Needs ground truth? |
 |---|---|---|
-| **Roughness** | Median [root mean square](https://en.wikipedia.org/wiki/Root_mean_square) (RMS) distance of 3mm surface patches from their best-fit plane. Measured only on the patch the first view saw, which every subset includes, so rows compare the same surface. | No |
+| **Roughness** | Median [root mean square](https://en.wikipedia.org/wiki/Root_mean_square) (RMS) distance of 3mm surface patches from their best-fit plane, on either mesh: the **measured surface** (`observed.obj`) or the **final mesh** (`mesh.obj`, only where it lies on measured data, since the filled-in bottom and walls are smooth by construction). In the progression, it's measured only on the patch the first view saw, which every subset includes, so rows compare the same surface. | No |
 | **Deviation from final** | Distance from this subset's observed surface to the all-views closed mesh (median and 90th percentile). | No |
 | **Completeness** | Share of the all-views observed surface that this subset saw (within 2mm). It's relative: the all-views scan is 100% by definition, and a region no view ever saw (the bottom) can't count against it. That's why the figures label each panel with the measured share instead. | No |
 | **Measured share** | Share of the closed mesh's surface that lies within 2mm of measured data ([§6.2](#62-measured-vs-filled-in-observedobj-and-meshobj)). | No |
@@ -759,7 +801,7 @@ To keep that distinction visible, every scan writes two meshes of each object (i
 | Green cylinder, 50 views | 8,764 triangles, 70cm², 0.7MB | 24,758 triangles, 81cm², 1.7MB, 86% on measured data |
 | Use it to | Judge what the camera actually captured, and measure accuracy without assumptions | Use the object: volume, simulation, printing, planning around it |
 
-Most of the difference in area (13cm² for the block and 11cm² for the cylinder) is the bottom, which the camera can never see. `mesh.obj` also has about three times as many triangles, because Poisson builds its surface on a finer, uniform grid instead of reusing the fusion's triangles. Both meshes are smoothed only lightly (5 Taubin steps on the observed surface, which barely change its size), so both keep the RealSense's few-tenths-of-a-millimeter ripples.
+Most of the difference in area (13cm² for the block and 11cm² for the cylinder) is the bottom, which the camera can never see. `mesh.obj` also has about three times as many triangles, because Poisson builds its surface on a finer, uniform grid instead of reusing the fusion's triangles. Both meshes are smoothed lightly (5 steps of HC Laplacian, [§5.9](#59-smoothing-the-mesh)), so both keep some of the RealSense's few-tenths-of-a-millimeter ripples.
 
 ### 6.3 Comparing settings, methods and cameras
 
@@ -792,10 +834,11 @@ The table below lists the settings that most change how smooth and how accurate 
 | `views.elevations_deg`, `views.azimuth_step_deg`, `--max-views` | 10/15/25/50/72°, 30° (61 candidates) | More views: more averaging and coverage, longer scans | **real**: 16 spread views measured every side ([§3.2](#32-scanning-an-object-with-multiple-views)) |
 | `reconstruct.edge_grow` † | 2px | Wider: removes more edge fattening, loses more wall data | **real**: 32.62 → 32.22mm diameter at 2px, nothing gained beyond |
 | `reconstruct.voxel` † | 1.5mm | Smaller: finer detail and sharper edges, but fewer readings per voxel (noisier) and more memory | judgment |
-| `reconstruct.sdf_trunc` † | 6mm (4 voxels) | Wider: views that disagree still overlap and average (smoother), but thin parts blur together; narrower: sharper, but small misalignments leave holes or double walls | judgment |
+| `reconstruct.sdf_trunc` † | 6mm (4 voxels) | Wider: views that disagree still overlap and average (smoother), but thin parts blur together; narrower: sharper, but small misalignments leave holes or double walls | **real** (below): 4.5mm looks like a better compromise; to be confirmed on the 320mm re-scans |
 | `reconstruct.min_views` | 2 | Higher: only surface confirmed by more views (cleaner, more holes) | judgment |
 | `reconstruct.align` | true | The alignment step on or off ([§3.4](#34-the-two-fixes-that-mattered-most): off was closer to the calipers on one cylinder) | open question |
 | `reconstruct.closing` | flat_bottom | `flat_bottom`, `poisson` (Poisson through the measured surface alone) or `none` (the observed surface, open) | judgment |
+| `reconstruct.smoothing`, `smoothing_iterations`, `smooth_target` | hc_laplacian, 5 steps, both meshes | Which smoothing, how strong, and on which mesh | **real** (below) |
 
 #### Frames per view: 1 to 50
 
@@ -830,6 +873,40 @@ To see how many frames each view needs, I took the orange block's full scan (49 
 - **Requiring a reading in 90% of frames** drops some flickering edge pixels (the width comes in by about 0.5mm and the views agree better), but also wall pixels that read only some of the time, so the surface gets rougher.
 
 For now, 5 frames stays the default, and `--full-scan` is for collecting datasets like this one. The results are in `data/experiments/20261102-160853-orange-frames/`, `...-161453-orange-frames-views/` and `...-165634-orange-frame-combine/`.
+
+#### Smoothing methods
+
+*From the full scans at the 280mm standoff; to be updated after the 320mm re-scans.* Each method was applied with 5 steps to the final mesh of each full scan ("none" leaves it as fusion and Poisson built it). Roughness is the final mesh's, on its measured parts; size errors are against the average caliper measurements, and the bowl's CAD numbers are the median error and the bias (positive: too big) against its CAD model.
+
+| Method | Final-mesh roughness (block / cylinder / bowl) | Block width, length / height | Cylinder diameter / height | Bowl: CAD median / bias / height |
+|---|---|---|---|---|
+| none | 0.092 / 0.095 / 0.229mm | +4.40, +4.72 / +1.08mm | +4.74 / +1.22mm | 1.10 / +0.43 / +1.38mm |
+| taubin | 0.088 / 0.092 / 0.219mm | +4.36, +4.72 / +1.14mm | +4.40 / +1.23mm | 1.11 / +0.45 / +1.64mm |
+| laplacian | 0.071 / 0.082 / 0.174mm | +4.25, +4.65 / +0.99mm | +4.55 / +1.11mm | 1.07 / +0.40 / +1.04mm |
+| simple | 0.067 / 0.076 / 0.140mm | +4.20, +4.61 / +0.94mm | +4.59 / +1.13mm | 1.06 / +0.35 / +0.93mm |
+| **hc_laplacian** | **0.064 / 0.076 / 0.140mm** | **+4.18, +4.61 / +0.95mm** | **+4.27 / +1.07mm** | 1.07 / +0.39 / **+0.89mm** |
+| cotangent_laplacian | 0.074 / 0.079 / 0.166mm | +4.28, +4.63 / +0.96mm | +4.62 / +1.15mm | 1.06 / +0.40 / +0.92mm |
+| two_step | 0.069 / 0.083 / 0.128mm | +4.89, +5.07 / +2.16mm | +4.30 / +2.35mm | 1.07 / +0.40 / +4.31mm |
+
+- **The smoothest (least rough) final mesh: HC Laplacian**, 30-39% less rough than no smoothing (tied with the simple average on the cylinder and the bowl).
+- **The most accurate: HC Laplacian against the calipers** (the block's and cylinder's sizes and every height), and **the simple average against the bowl's CAD model**, by 0.01mm in median error, which is within rebuild noise.
+- **Taubin, the method used before, barely smooths** at 5 steps. **Two-step makes every object 1-3mm taller** (it sharpens and lifts the top edges: an added feature), so it's out. Rebuilding with identical settings varies by about ±0.15mm, so size differences under about 0.3mm aren't meaningful.
+
+#### TSDF truncation band and voxel size
+
+*From the full scans at the 280mm standoff; to be updated after the 320mm re-scans.* Each setting changed on its own (1.5mm voxels for the bands, a ±6mm band for the voxels), with HC Laplacian smoothing on every mesh; figures in [§5.7](#57-fusing-the-views-tsdf).
+
+| Band | Orange block (width, length / height) | Green cylinder (diameter / height) | Bowl: CAD median / bias, measured share | Cup / mug: final-mesh roughness |
+|---|---|---|---|---|
+| 2mm | +4.0, +4.2 / +0.4mm | +3.8 / +0.7mm | 0.96 / −0.62mm, 70% | 0.348 / 0.243mm |
+| 3mm | +4.3, +4.5 / +0.5mm | +4.3 / +0.8mm | 1.09 / −0.76mm, 82% | 0.142 / 0.168mm |
+| 4.5mm | +4.1, +4.6 / +0.8mm | +4.4 / +1.0mm | **0.98 / −0.22mm**, 87% | 0.086 / 0.103mm |
+| **6mm** (default) | +4.2, +4.6 / +0.9mm | +4.3 / +1.1mm | 1.03 / +0.34mm, 89% | 0.074 / 0.083mm |
+| 9mm | +4.2, +4.7 / +1.1mm | +4.7 / +1.3mm | 1.71 / +1.24mm, 85% | 0.083 / 0.084mm |
+
+- **On the solid objects, a narrower band mainly improves the height** (by up to 0.6mm), and the cylinder's diameter by 0.5mm at 2mm; the block's width hardly changes.
+- **On the thin-walled bowl, the band decides whether the wall survives:** at 2-3mm it falls apart (the views disagree by 2-3.6mm and the wall shrinks inward), at 9mm it thickens (+1.24mm bias), and **4.5mm is the most accurate** (bias −0.22mm). The cup's and mug's volumes change two- to three-fold with the band, so it shapes thin walls strongly.
+- **Voxel size:** on the block and cylinder, 2.0mm voxels come out slightly smoother and more accurate than 1.5mm, and 1.0mm worse. On the bowl, only 1.5mm works: at 1.0mm only 25% of the surface was measured and the closing ballooned, and at 2.0mm the closing failed.
 
 #### Evaluating Tuning Parameters
 
@@ -1090,7 +1167,7 @@ Every command, whether it moves the arm, and what it does:
 
 I wanted to see what the scanner was doing while it ran, without waiting for the final mesh. Every arm run (`scan.py` and `calibration.py`) starts a small web server on this computer and prints its link, `http://localhost:8765`, and the page follows the scan:
 
-- **Mesh**, in 3D, in gray or in color: each captured view is fused into a preview while the arm moves on to the next one, so the scan takes no longer. The preview skips the alignment and closing, so it's roughly the final `observed.obj`. **Final mesh** shows the closed `mesh.obj` once the scan is done.
+- **Mesh**, in 3D, in gray or in color: each captured view is fused into a preview while the arm moves on to the next one, so the scan takes no longer. The preview skips the alignment, closing and smoothing, so it's roughly the final `observed.obj`, unsmoothed. **Final mesh** shows the closed `mesh.obj` once the scan is done.
 - **Point cloud**, in 3D: the latest view's points near the object, or every view so far.
 - **RGB-D Camera Feed**: the latest capture, shown as color, as depth, or by height above the table. **Map** shows the survey's numbered map (§5.1).
 - **Monitoring camera**: an optional second camera that watches the whole cell (any Viam camera component, `[live] monitor_camera`), streamed as live video.
@@ -1477,7 +1554,19 @@ With alignment off, the views disagree almost twice as much (0.57 → 1.0mm) and
 | 60° | **+3.2, +3.2mm** | **+2.1mm** | −0.4, +0.6mm; 1.18mm, −0.72mm |
 | 45° | +3.4, +3.5mm | +2.2mm | +0.1, +0.2mm; 1.24mm, −0.79mm |
 
-**3. A narrower TSDF truncation band is more accurate, at the cost of noise and some holes** (E3; `...-E3-voxel-trunc-*`). With 1.5mm voxels, a 3mm band (vs. the default 6mm) took the cylinder from +2.5 to +2.0mm and the block from +3.9, +4.0 to +3.3, +3.3mm, and the heights 0.2mm closer. The measured surface's roughness rose 10-15%, and the block's measured share fell from 88% to 80%. A 9mm band was worse on every count. *Being re-run on the full scans, the bowl, the mug and the cup (2026-11-03).*
+**3. A narrower TSDF truncation band is more accurate, at the cost of noise and some holes** (E3; `...-E3-voxel-trunc-*`). With 1.5mm voxels, a 3mm band (vs. the default 6mm) took the cylinder from +2.5 to +2.0mm and the block from +3.9, +4.0 to +3.3, +3.3mm, and the heights 0.2mm closer. The measured surface's roughness rose 10-15%, and the block's measured share fell from 88% to 80%. A 9mm band was worse on every count.
+
+Re-run on 2026-11-03 with HC Laplacian on every mesh (`...-hc-trunc-*`, `...-hc-voxel-*`; figures `media/images/tsdf_truncation_*.png`, `tsdf_voxel_*.png`):
+
+| Band (1.5mm voxels) | Orange block, full scan (width, length / height) | Green cylinder, full scan (diameter / height) | Bowl, full scan: CAD median / bias, measured share | Cup / mug: final-mesh roughness |
+|---|---|---|---|---|
+| 2mm | +4.0, +4.2 / +0.4mm | +3.8 / +0.7mm | 0.96 / −0.62mm, 70% | 0.348 / 0.243mm |
+| 3mm | +4.3, +4.5 / +0.5mm | +4.3 / +0.8mm | 1.09 / −0.76mm, 82% | 0.142 / 0.168mm |
+| 4.5mm | +4.1, +4.6 / +0.8mm | +4.4 / +1.0mm | 0.98 / −0.22mm, 87% | 0.086 / 0.103mm |
+| 6mm (default) | +4.2, +4.6 / +0.9mm | +4.3 / +1.1mm | 1.03 / +0.34mm, 89% | 0.074 / 0.083mm |
+| 9mm | +4.2, +4.7 / +1.1mm | +4.7 / +1.3mm | 1.71 / +1.24mm, 85% | 0.083 / 0.084mm |
+
+On the full scans, a narrower band mainly improves the height of the solid objects (up to 0.6mm). On the thin-walled bowl, 2-3mm breaks the wall apart (the views disagree by 2-3.6mm and it shrinks inward), 9mm thickens it, and 4.5mm is the most accurate (bias −0.22mm). The cup's and mug's volumes change two- to three-fold with the band, so it strongly shapes thin walls. Voxel size (6mm band): 2.0mm voxels are slightly smoother and more accurate than 1.5mm on the block and cylinder, and 1.0mm worse; on the bowl only 1.5mm works (1.0mm: 25% measured and the closing balloons; 2.0mm: the closing fails). These scans are from the 280mm standoff; confirm on the 320mm re-scans before changing the defaults (4.5mm looks like a good compromise).
 
 **4. Smoothing the measured surface with Laplacian instead of Taubin makes it much smoother without changing the size** (E4; `...-E4-mesh-*`): measured-surface roughness 0.12 → 0.09mm (block), 0.13 → 0.09mm (cylinder), 0.25 → 0.18mm (printed block), with size errors within 0.1mm. The final, closed mesh isn't smoothed at all (only the measured surface is), so it wasn't affected. The closing method (flat bottom vs. plain Poisson) changed nothing measurable on these objects.
 

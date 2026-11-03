@@ -142,14 +142,23 @@ def alignment_figure(old_session: Session) -> None:
 
 
 def variants_figure(experiment: Path, name: str, title: str, labels: dict[str, str], note: str = "",
-                    zoom: float = 0.6, lift: float = 0.45, elevation: float = 25.0, azimuth: float = -60.0) -> None:
+                    zoom: float = 0.6, lift: float = 0.45, elevation: float = 25.0, azimuth: float = -60.0,
+                    frame_on: str | None = None) -> None:
     ''' One saved comparison (tools/compare.py) as a row of renders: each variant's final mesh,
     zoomed onto the top part of the object (where noise, rounded edges and added features
     show), labeled with its own numbers. `labels` maps a variant's label to its panel name,
-    in panel order. '''
+    in panel order. Every panel is framed on `frame_on`'s mesh (default: the first); a variant
+    whose closing failed shows its measured surface instead, and says so. '''
     rows = {row["label"]: row for row in json.loads((experiment / "results.json").read_text())}
-    meshes = {label: o3d.io.read_triangle_mesh(str(experiment / safe_name(label) / "mesh.ply")) for label in labels}
-    reference = next(m for m in meshes.values() if len(m.triangles))
+    meshes, failed = {}, set()
+    for label in labels:
+        folder = experiment / safe_name(label)
+        mesh = o3d.io.read_triangle_mesh(str(folder / "mesh.ply")) if (folder / "mesh.ply").exists() else o3d.geometry.TriangleMesh()
+        if len(mesh.triangles) == 0 or not rows[label].get("closed"):
+            mesh = o3d.io.read_triangle_mesh(str(folder / "observed.ply"))
+            failed.add(label)
+        meshes[label] = mesh
+    reference = meshes[frame_on] if frame_on else next(m for m in meshes.values() if len(m.triangles))
     center, radius = framing(reference)
     top = np.asarray(reference.vertices)[:, 2].max()
     center = center + np.array([0.0, 0.0, lift * (top - center[2])])  # toward the top of the object
@@ -164,6 +173,8 @@ def variants_figure(experiment: Path, name: str, title: str, labels: dict[str, s
             lines.append(f"CAD {row['cad_median_mm']:.2f} / {row['cad_bias_mm']:+.2f}mm")
         elif row.get("mean_size_error_pct") is not None:
             lines.append(f"size +{row['mean_size_error_pct']:.1f}%")
+        if label in failed:
+            lines = ["not closed: the measured surface"]
         image = render(mesh, PANEL, elevation, azimuth, center, zoom * radius, wire_boundary=False)
         panels.append((image, panel_name, " · ".join(lines)))
     figure(name, title, panels, note)
