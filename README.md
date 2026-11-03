@@ -2,21 +2,21 @@
   <img src="media/images/recon_header1.jpg" alt="A white UFactory xArm6 with a gripper and a wrist-mounted RealSense camera, above a table with a ChArUco calibration mat, a green cylinder and an orange block" width="49%">
   <img src="media/images/recon_header2.jpg" alt="Close-up of the RealSense camera on its bracket under the gripper, with the green cylinder, the orange block and the calibration mat out of focus on the table" width="49%">
   <br>
-  <em>The xArm6 on armfarm14 with its wrist-mounted RealSense, the ChArUco calibration mat, and two test objects.</em>
+  <em>The xArm6 with its wrist-mounted RealSense, the <a href="https://docs.opencv.org/4.x/df/d4a/tutorial_charuco_detection.html">ChArUco</a> calibration mat (a chessboard with ArUco markers), and two test objects.</em>
 </p>
 
 <h1 align="center">ViamObjectReconstruction by Cameron Lerch</h1>
 
 ViamObjectReconstruction finds the objects sitting on a table, drives a [Viam](https://www.viam.com/)-controlled robotic arm with a wrist-mounted Intel RealSense depth camera around each one, and stitches the views into a separate 3D mesh per object. A single RealSense view is noisy and sees only one side; fusing many views from known arm poses averages the noise away and fills in the sides, and the result is closed with a flat bottom where the object rests on the table.
 
-It runs on a UFactory xArm6 in a remote lab cell (armfarm14) and includes a synthetic RGB-D simulator, so the whole reconstruction pipeline can be developed and scored against known shapes without a robot.
+It was developed on a UFactory xArm6 in a shared, remote lab cell, and includes a synthetic color-and-depth ([RGB-D](https://en.wikipedia.org/wiki/Depth_map)) camera simulator, so the whole reconstruction pipeline can be developed and scored against known shapes without a robot.
 
 ---
 
 ## Quick Start
 
 > [!NOTE]
-> You need a Viam machine with an arm, a depth camera mounted on the arm, and the builtin motion service ([Machine Configuration](#102-machine-configuration)). This is the shortest path; every other command, option and setting, the tests, and running without a robot are in [Setup and Usage](#10-setup-and-usage).
+> You need a Viam machine with an arm, a depth camera mounted on the arm, and the builtin motion service ([Machine Configuration](#92-machine-configuration)). This is the shortest path; every other command, option and setting, the tests, and running without a robot are in [Setup and Usage](#9-setup-and-usage).
 
 **1. Install**
 
@@ -43,7 +43,7 @@ It asks once before the arm moves, then finds the mat and calibrates the camera,
 python scan.py
 ```
 
-It asks once before the arm moves, surveys the table, lists the objects it found (with their centers, sizes and colors), and asks before scanning each one. When it's done, the arm parks over the mat and every mesh and figure is built. While it runs, open the printed link (`http://localhost:8765`) to watch the scan live, with Pause and Stop buttons ([§5.12](#512-watching-a-scan-live)). `python scan.py --plan-only` plans without moving; `--max-views 16` scans in about half the time; `--full-scan` takes 50 frames per view and keeps every raw frame (a dataset to subsample later; about 2 minutes per view).
+It asks once before the arm moves, surveys the table, lists the objects it found (with their centers, sizes and colors), and asks before scanning each one. When it's done, the arm parks over the mat and every mesh and figure is built. While it runs, open the printed link (`http://localhost:8765`) to watch the scan live, with Pause and Stop buttons ([§9.5](#95-watching-a-scan-live)). `python scan.py --plan-only` plans without moving; `--max-views 16` scans in about half the time; `--full-scan` takes 50 frames per view and keeps every raw frame (a dataset to subsample later; about 2 minutes per view).
 
 **4. Results** are in `data/<session>/object_NN/`: `recon/mesh.obj` (the closed model), `recon/observed.obj` (only what was measured) and `progression.png` (the model from 1 to all views). Open the meshes in Blender; units are millimeters, so scale the import by 0.001.
 
@@ -56,17 +56,15 @@ It asks once before the arm moves, surveys the table, lists the objects it found
 3. [Results](#3-results)
 4. [System Architecture](#4-system-architecture)
 5. [Methodology](#5-methodology)
-6. [Measured vs. Filled In](#6-measured-vs-filled-in)
+6. [Evaluating and Tuning](#6-evaluating-and-tuning)
 7. [Critical Design Decisions](#7-critical-design-decisions)
 8. [What I Tried That Didn't Work](#8-what-i-tried-that-didnt-work)
-9. [Output Files](#9-output-files)
-10. [Setup and Usage](#10-setup-and-usage)
-11. [Working Safely on a Shared Real Arm](#11-working-safely-on-a-shared-real-arm)
-12. [Repository Structure](#12-repository-structure)
-13. [Shortcomings and Proposed Solutions](#13-shortcomings-and-proposed-solutions)
-14. [Lessons for Other Developers](#14-lessons-for-other-developers)
-15. [Future Work](#15-future-work)
-16. [Feedback on Viam](#16-feedback-on-viam)
+9. [Setup and Usage](#9-setup-and-usage)
+10. [Working Safely on a Shared Real Arm](#10-working-safely-on-a-shared-real-arm)
+11. [Shortcomings and Proposed Solutions](#11-shortcomings-and-proposed-solutions)
+12. [Lessons for Other Developers](#12-lessons-for-other-developers)
+13. [Future Work](#13-future-work)
+14. [Feedback on Viam](#14-feedback-on-viam)
 
 ---
 
@@ -101,20 +99,20 @@ When I started, I assumed the main job was to stitch the views together and aver
 
 - **The camera's mount on the wrist** must be calibrated; here it was 21mm and 2.2° off ([§5.6](#56-camera-calibration)).
 - **Each view's pose** is refined by aligning the views to each other ([§5.7](#57-stitching-aligning-the-views)).
-- **The depth readings themselves** must be accurate. The real cylinder came out 3mm too wide while every view agreed with every other ([§3.5](#35-the-real-cylinder-against-calipers)).
+- **The depth readings themselves** must be accurate. The real cylinder came out 3mm too wide while every view agreed with every other ([§3.4](#34-the-real-cylinder-against-calipers)).
 
 No smoothing can fix a view that is in the wrong place, and this part has caused the largest errors in the project.
 
 **3. Turning the measurements into a surface**
 
-- **Averaging:** a TSDF averages every view's depth in 1.5mm voxels ([§5.8](#58-fusing-the-views-tsdf)); its zero crossing is the surface. Most of the "smoothing" happens here, as averaging, rather than as smoothing a rough mesh afterward.
+- **Averaging:** a [truncated signed distance function](https://en.wikipedia.org/wiki/Signed_distance_function) (TSDF) averages every view's depth in 1.5mm voxels ([§5.8](#58-fusing-the-views-tsdf)); its zero crossing is the surface. Most of the "smoothing" happens here, as averaging, rather than as smoothing a rough mesh afterward.
 - **Resolution:** the voxel size sets the mesh's resolution. Smaller voxels keep more detail but average fewer readings each.
 - **What to keep:** surface seen by fewer than 2 views is dropped as untrustworthy.
 - **Light smoothing** (5 Taubin steps) removes leftover ripple without shrinking the mesh.
 - **Sharp edges** get rounded by about one voxel: the synthetic box's error is 0.25mm against the cylinder's 0.07mm.
 - **Filling what was never seen** needs a best guess. Here that is a flat bottom and straight walls, joined to the measured surface by Poisson reconstruction, which continues it smoothly across gaps ([§5.9](#59-closing-the-mesh-with-a-flat-bottom)).
 
-**Assumption: objects have flat bottoms.** The objects rest flat on the table, and the camera can never see underneath them, so the bottom is always filled in: the object's outline seen from above, laid flat on the table plane. This assumption is only true for objects like these. The [measured share](#6-measured-vs-filled-in) says how much of each final mesh comes from measurement and how much from this and the straight-wall guess.
+**Assumption: objects have flat bottoms.** The objects rest flat on the table, and the camera can never see underneath them, so the bottom is always filled in: the object's outline seen from above, laid flat on the table plane. This assumption is only true for objects like these. The [measured share](#62-measured-vs-filled-in-observedobj-and-meshobj) says how much of each final mesh comes from measurement and how much from this and the straight-wall guess.
 
 **What "watertight" means.** A watertight (closed) mesh has no holes: every edge of every triangle is shared by exactly two triangles, so the surface completely encloses a volume, with a well-defined inside and outside. That is what makes a volume measurable and the mesh 3D-printable or usable in a physics simulator. The observed surface alone is never watertight: its underside is open and it has gaps wherever no view reached. Adding the flat bottom (and filling unseen walls) is what makes the final `mesh.obj` watertight. Strictly, a mesh with tiny self-intersections, which fusion always leaves, is still closed in this sense; [§8.4](#84-closing-the-mesh) explains why that distinction mattered.
 
@@ -135,20 +133,20 @@ I split the work into stages and tested each before moving on:
 
 ## 3. Results
 
-Every figure in this README is labeled under its caption: **REAL DATA** was captured on the armfarm14 arm; **SYNTHETIC DATA** comes from simulated RealSense views of shapes whose exact geometry is known, used where an exact answer is needed to score against; a **DIAGRAM** shows no data.
+Every figure in this README is labeled under its caption: **REAL DATA** was captured on the real arm; **SYNTHETIC DATA** comes from simulated RealSense views of shapes whose exact geometry is known, used where an exact answer is needed to score against; a **DIAGRAM** shows no data.
 
-### 3.1 The latest scans: one view at a time, and 1 to 34 views
+### 3.1 From one view to many
 
 The most complete real scans so far (session 20261028-093620): an orange block and a green cylinder, 34 views each, including the low 25° ring. Each column below is one view: the color image on top, and under it that view's depth as points with nothing removed (no edge filter, no outlier removal), all drawn from the same side-on direction. Each color image is turned (in 90° steps) so the table is at the bottom, and the small arrows in each panel's corner show the world x, y and z axes (a circled dot is an axis pointing straight at the viewer, as z does in the views from directly above). One view sees only the faces turned toward it; its walls are wavy and ribbed where they should be flat, the table shows depth "stair steps", and edges smear into the table. All 34 views placed by the arm's poses overlap into a fuzzy shell several millimeters thick; fusion turns that into the mesh at the bottom right.
 
 <p align="center">
   <img src="media/images/raw_view_noise_object0.png" alt="Orange block: four views (top, and three at 25° from different sides) with the color image above and that view's raw points below; the points show wavy walls, holes and stair-stepped table. The last column overlays all 34 views as a fuzzy shell above the fused block mesh" width="1000">
-  <br><sub><b>REAL DATA.</b> Orange block, armfarm14, 2026-10-28. Each view's depth is the per-pixel median of the 5 frames taken at that pose</sub>
+  <br><sub><b>REAL DATA.</b> Orange block, 2026-10-28. Each view's depth is the per-pixel median of the 5 frames taken at that pose</sub>
 </p>
 
 <p align="center">
   <img src="media/images/raw_view_noise_object1.png" alt="Green cylinder: the same layout, four raw views and all 34 views overlaid above the fused cylinder mesh" width="1000">
-  <br><sub><b>REAL DATA.</b> Green cylinder, armfarm14, 2026-10-28</sub>
+  <br><sub><b>REAL DATA.</b> Green cylinder, 2026-10-28</sub>
 </p>
 
 Every scan now also saves a figure of its reconstruction from 1, 2, 4, 8, 16 and all views (`object_NN/progression.png` in the session folder), seen from the arm's side, where the cameras could reach best (the two below predate that and use a fixed angle):
@@ -173,27 +171,22 @@ Every scan now also saves a figure of its reconstruction from 1, 2, 4, 8, 16 and
 | 34 | 86% | 0.11mm | 60.6cm³ | 87% | 0.11mm | 48.9cm³ |
 | Calipers | | | 52.9cm³ | | | 41.0cm³ |
 
-- **16 views measure everything the camera can reach; more views make it smoother.** "Measured" is the share of the closed mesh's surface that lies on measured data ([§6](#6-measured-vs-filled-in)). From 16 views (spread over the sphere) on it stays at 86-87%: every side and the top. The other 13-14% is the bottom, which no view can see. The volume settles at 16 views too, and from 16 to 34 views the roughness drops from 0.13-0.14mm to 0.11mm. A 16-view scan (`--max-views 16`, which picks 16 views spread over all directions) takes about half the time of a full one.
+- **16 views measure everything the camera can reach; more views make it smoother.** "Measured" is the share of the closed mesh's surface that lies on measured data ([§6.2](#62-measured-vs-filled-in-observedobj-and-meshobj)). From 16 views (spread over the sphere) on it stays at 86-87%: every side and the top. The other 13-14% is the bottom, which no view can see. The volume settles at 16 views too, and from 16 to 34 views the roughness drops from 0.13-0.14mm to 0.11mm. A 16-view scan (`--max-views 16`, which picks 16 views spread over all directions) takes about half the time of a full one.
 - **2 views measure less than 1.** With 2+ views, only surface that at least 2 views agree on is kept, and the two most different views share little.
-- **Height is right; width isn't.** Against the calipers (`scan.py compare`, which recognized each object by its shape and size), the heights are within 0.9mm, but the block comes out 3.8-4.0mm too wide and the cylinder 2.8mm too wide in diameter, so the volumes are 15-19% too large. That is the open problem of [§3.5](#35-the-real-cylinder-against-calipers) and [§13](#13-shortcomings-and-proposed-solutions).
+- **Height is right; width isn't.** Against the calipers (`scan.py compare`, which recognized each object by its shape and size), the heights are within 0.9mm, but the block comes out 3.8-4.0mm too wide and the cylinder 2.8mm too wide in diameter, so the volumes are 15-19% too large. That is the open problem of [§3.4](#34-the-real-cylinder-against-calipers) and [§11](#11-shortcomings-and-proposed-solutions).
 
 <p align="center">
   <img src="media/images/scan_view_50deg.jpg" alt="The wrist camera's view of a green cylinder, a yellow block and an orange block on a white table, from the 50° ring" width="520">
   <br>
   <em>One of the 25 views the arm took of the green cylinder (50° ring), straight from the wrist-mounted RealSense.</em>
-  <br><sub><b>REAL DATA.</b> A photo straight from the wrist camera on armfarm14</sub>
+  <br><sub><b>REAL DATA.</b> A photo straight from the wrist camera</sub>
 </p>
 
-### 3.2 Real cylinder: one view vs. many
+#### Noise and consistency, view by view
 
-25 views of a green cylinder (about 33mm × 60mm): the top view, the 72° ring and the 50° ring (this earlier scan stopped before the lowest, 25° ring; the scans in [§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views) include it).
+An earlier 25-view scan of the green cylinder (the top view and the 72° and 50° rings, before the 25° ring was added) also recorded one raw view, and how far each subset's surface lies from the final result:
 
-<p align="center">
-  <img src="media/images/progression_real.png" alt="Real cylinder: one view's raw points form a thin noisy sliver at the top; the 1- and 3-view observed meshes are small patches of the top; 8 views add partial walls with holes; 25 views give the whole object; the closed 25-view mesh is a full cylinder with the filled-in bottom in orange" width="1000">
-  <br><sub><b>REAL DATA.</b> 25 views of the green cylinder captured on armfarm14</sub>
-</p>
-
-| Views | Seen, of what all 25 views saw (completeness) | Roughness | Deviation from final (median / p90) | Closed volume | Measured share |
+| Views | Seen, of what all 25 views saw (completeness) | Roughness | Deviation from final (median / 90th percentile) | Closed volume | Measured share |
 |---|---|---|---|---|---|
 | raw points, 1 view | – | 0.278mm | 0.32 / 1.01mm | – | – |
 | 1 (best single-view mesh) | 11% | 0.127mm | 0.29 / 0.80mm | 31.4cm³ | 11% |
@@ -203,13 +196,32 @@ Every scan now also saves a figure of its reconstruction from 1, 2, 4, 8, 16 and
 | 18 | 100% | 0.114mm | 0.08 / 0.48mm | 49.6cm³ | 87% |
 | 25 | 100% | **0.104mm** | 0.05 / 0.15mm | **49.4cm³** | **87%** |
 
-- **Coverage:** the best single-view mesh sees 11% of the object (essentially its top); its closed model is 89% assumption and holds 31.4cm³, 36% less than the 25-view result. It takes about 18 views to see all of this cylinder, and from 18 views the closed mesh's volume stops changing.
 - **Noise:** the same patch of surface goes from 0.278mm roughness in one raw view, to 0.127mm once that one view is fused and lightly smoothed, to about 0.10mm with 2 or more views (2.8× smoother than raw), and then levels off. Real RealSense noise has a slowly varying, spatially correlated part that averaging removes much more slowly than the independent noise in the simulator (where roughness keeps falling, 38× over 37 views).
 - **Consistency:** the 90th-percentile distance from a subset's surface to the final result falls from 1.01mm (one raw view) to 0.15mm, so each added view still tightens the shape after the coverage is complete.
 
-The column definitions are in [§5.10](#510-measuring-quality).
+The column definitions are in [§6.1](#61-measuring-quality).
 
-### 3.3 Synthetic objects: scored against the true shape
+#### Measured vs. filled in, by view count
+
+<p align="center">
+  <img src="media/images/measured_vs_filled.png" alt="Closed meshes of the real cylinder from 1, 8 and 25 views, from the side and from below. With 1 view almost all of the walls and the bottom are orange (filled in); with 8, most of the walls are measured; with 25, all walls are measured and only the bottom is filled in" width="1000">
+  <br><sub><b>REAL DATA.</b> The real green cylinder from 1, 8 and 25 views</sub>
+</p>
+
+| Real cylinder | 1 view | 8 views | 25 views |
+|---|---|---|---|
+| Measured share | 11% | 65% | 87% |
+| Closed volume | 31.4cm³ | 50.4cm³ | 49.4cm³ |
+
+How to read it:
+
+- **The bottom is always filled in.** The camera can never see under the object. For these cylinders the bottom is 10-11% of the surface, which is why the real 25-view scan (87%) and the synthetic 37-view scan (88%) both top out just under 90%.
+- **With few views, the walls are mostly guessed.** The best single-view closed mesh looks like a plausible cylinder, but 89% of it is assumption, not data, and its volume (31.4cm³) is 36% below the 25-view result and 23% below the caliper volume. This is why the closed meshes alone would overstate what few views achieve, and why `observed.obj` is saved next to every `mesh.obj`.
+- **About 18 views see all of this cylinder**, and from 18 views on, the closed mesh's volume stops changing.
+- **The measured share caught a real bug.** An earlier version of this scan was only 64% measured, with one side of the cylinder orange in every closed mesh, even with 25 views. The crop box was cutting that side off ([§8.2](#82-detection)); completeness alone couldn't show it.
+- **The priors are only right for objects shaped like these:** flat bottom, walls roughly vertical where unseen. An overhang or a hollow would be filled in wrong; the measured share says how much of the model depends on that.
+
+### 3.2 Synthetic objects: scored against the true shape
 
 The same pipeline on rendered views of known shapes (`python scan.py demo --progression`), with RealSense-like noise and a 2.5mm / 0.8° camera-mount error:
 
@@ -232,16 +244,16 @@ The same pipeline on rendered views of known shapes (`python scan.py demo --prog
 | | 37 | **0.025mm** | **0.25 / 0.41mm** | **151.4cm³** (154.0) |
 
 - **Many views vs. one:** the cylinder's closed mesh goes from 1.60mm median error with the best single view to 0.07mm with 37 views (23× better), within 0.6% of its true volume. The box goes from 1.45mm to 0.25mm (6× better).
-- **Edges:** the box is less accurate than the cylinder because fusion rounds its sharp edges by about one voxel (1.5mm), which also removes 1.7% of its volume ([§13](#13-shortcomings-and-proposed-solutions)).
+- **Edges:** the box is less accurate than the cylinder because fusion rounds its sharp edges by about one voxel (1.5mm), which also removes 1.7% of its volume ([§11](#11-shortcomings-and-proposed-solutions)).
 - **2 views can be worse than 1.** Two views keep only the surface both of them saw, which here is less than one view keeps on its own, so the closed shape is a worse guess (the box: 2.33mm vs. 1.45mm). From 3 views on, the result improves steadily.
 
-### 3.4 The two fixes that mattered most
+### 3.3 The two fixes that mattered most
 
 **Calibrating the camera mount.** The same 25 real captures, aligned and fused identically; only the camera mount differs:
 
 <p align="center">
   <img src="media/images/calibration_before_after.png" alt="Side by side: uncalibrated, the 25 views' observed surface smears into a T-shaped mess, 45.5mm across and 66mm tall, 32% off on average; calibrated, a clean cylinder 32.2mm across and 60.3mm tall, 5% off. Takeaway: 7 times the error without calibration" width="1000">
-  <br><sub><b>REAL DATA.</b> The same 25 armfarm14 views of the green cylinder</sub>
+  <br><sub><b>REAL DATA.</b> The same 25 real views of the green cylinder</sub>
 </p>
 
 "Uncalibrated" is the camera mount as it was first entered in the Viam app (measured by hand, 21mm and 2.2° from the calibrated one); these views were captured with it. **Uncalibrated, the mesh's size was off by 32% on average; calibrated, by 5%: 7× the error without calibration.** Both use the alignment step, which can't rescue a mount that far off: it rejected 14 of the 25 views' corrections.
@@ -257,7 +269,7 @@ The figure measures the **observed** surface (what the camera saw, height from t
 
 Roundness is the median distance of the wall's points from the best-fitting circle.
 
-One open question: with the calibrated mount, turning alignment *off* gives a diameter within 0.65mm of the calipers (28.9 vs. 32.2mm with it on), though a less round one. On the 34-view scans of [§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views) the picture is mixed: without alignment the cylinder is 1.1mm closer (31.14 vs. 32.28mm), but the block gets one side closer and the other farther (31.82 × 35.40mm vs. 33.50 × 33.77mm), and the views disagree almost twice as much (about 1.0mm vs. 0.57mm). Alignment is not the main source of the size error, but how it moves round objects is worth a closer look.
+One open question: with the calibrated mount, turning alignment *off* gives a diameter within 0.65mm of the calipers (28.9 vs. 32.2mm with it on), though a less round one. On the 34-view scans of [§3.1](#31-from-one-view-to-many) the picture is mixed: without alignment the cylinder is 1.1mm closer (31.14 vs. 32.28mm), but the block gets one side closer and the other farther (31.82 × 35.40mm vs. 33.50 × 33.77mm), and the views disagree almost twice as much (about 1.0mm vs. 0.57mm). Alignment is not the main source of the size error, but how it moves round objects is worth a closer look.
 
 **Aligning all views together.** The same 37 synthetic views, aligned two ways:
 
@@ -266,7 +278,7 @@ One open question: with the calibrated mount, turning alignment *off* gives a di
   <br><sub><b>SYNTHETIC DATA.</b> 37 simulated views with deliberate pose errors</sub>
 </p>
 
-### 3.5 The real cylinder against calipers
+### 3.4 The real cylinder against calipers
 
 All four test objects were measured with calipers (`ground_truth.toml`); `scan.py compare` measures a reconstructed mesh the same way (blocks: width, length, height; the cylinder: diameter and height) and reports the errors.
 
@@ -299,7 +311,7 @@ The shape is right (round, straight, the right height) but the walls sit about 1
 | Board mount + depth correction, 2px edge filter | 32.90mm | 60.21mm |
 | **Calipers** | **29.53mm** | **59.93mm** |
 
-So the extra width (about 1.3mm per side after the edge filter) comes from how the RealSense measures the object's walls and edges, not from where the camera is or how it measures flat surfaces. The synthetic objects, whose simulated noise has no edge fattening, come out within 0.6-1.7% of their true volume, so it isn't the reconstruction method either. Closing this gap is the first item in [§15](#15-future-work).
+So the extra width (about 1.3mm per side after the edge filter) comes from how the RealSense measures the object's walls and edges, not from where the camera is or how it measures flat surfaces. The synthetic objects, whose simulated noise has no edge fattening, come out within 0.6-1.7% of their true volume, so it isn't the reconstruction method either. Closing this gap is the first item in [§13](#13-future-work).
 
 ---
 
@@ -308,11 +320,11 @@ So the extra width (about 1.3mm per side after the edge filter) comes from how t
 ### 4.1 Pipeline
 
 <p align="center">
-  <img src="media/diagrams/pipeline.png" alt="Pipeline: on the robot, survey, plan views, relocate if needed, capture stop-and-go, saving views; offline, calibrate the camera mount, align views, fuse with a TSDF, close with a flat bottom" width="1000">
+  <img src="media/diagrams/pipeline.png" alt="Pipeline: on the robot, survey, plan views, relocate (not yet implemented), capture stop-and-go, saving views; offline, calibrate the camera mount, align views, fuse with a TSDF, close with a flat bottom" width="1000">
   <br><sub><b>DIAGRAM.</b> No data</sub>
 </p>
 
-The robot half moves the arm and saves raw views to disk; the offline half never touches the robot. Keeping the raw views means every reconstruction idea can be re-run and compared on the same captures, which is how most of [§8](#8-what-i-tried-that-didnt-work) was found.
+The pipeline has two halves. The top half runs on the robot: it moves the arm and saves every view (color, depth and the camera's pose) to disk. The bottom half only reads those saved views and never talks to the robot. Because the views are saved, the same captures can be rebuilt with different settings or methods and the results compared directly; most of the findings in [§8](#8-what-i-tried-that-didnt-work) came from doing that.
 
 ### 4.2 Where each view's pixels go
 
@@ -331,26 +343,26 @@ The robot half moves the arm and saves raw views to disk; the offline half never
 
 #### Where the camera looks
 
-The camera looks straight down from positions on a grid over the search region (`[workspace] x_range, y_range`), 600mm up. The grid spacing comes from what one view covers. A pinhole camera at height $h$ above the table sees a patch whose short side is
+The camera looks straight down from positions on a grid over the search region (`[workspace] x_range, y_range`), 600mm up. The grid spacing comes from what one view covers. A pinhole camera with a vertical [field of view](https://en.wikipedia.org/wiki/Field_of_view) (FOV), at height *h* above the table, sees a patch whose short side is
 
 ```math
 w = 2h\,\tan\!\left(\tfrac{\text{FOV}}{2}\right), \qquad \tfrac{\text{FOV}}{2} = \arctan\frac{H/2}{f_y} = \arctan\frac{360}{916} \approx 21.4^\circ
 ```
 
-so at $h \approx 612$mm (600mm plus the 12mm the table sits below the arm's base) the short side covers about 480mm, and the long side about 850mm. Positions 340mm apart therefore overlap by about 30% even when the camera's roll turns the short side along the grid. Only positions right over the arm's base (within 200mm) are left out. An earlier version also left out everything within 400mm of the base, where no scan target can stand ([§10.2](#102-machine-configuration)); but table near the base can still be right next to a target, and with that strip never seen, a block 400mm from the base was rejected as "not in open table".
+so at *h* ≈ 612mm (600mm plus the 12mm the table sits below the arm's base) the short side covers about 480mm, and the long side about 850mm. Positions 340mm apart therefore overlap by about 30% even when the camera's roll turns the short side along the grid. Only positions right over the arm's base (within 200mm) are left out. An earlier version also left out everything within 400mm of the base, where no scan target can stand ([§9.2](#92-machine-configuration)); but table near the base can still be right next to a target, and with that strip never seen, a block 400mm from the base was rejected as "not in open table".
 
 #### Following the table
 
-The survey doesn't visit every grid position. It starts at the reachable position nearest the camera, which must be over the table. After each view, it looks at the strip of points toward each of the four neighboring positions, beyond a quarter of the way there, and goes to a neighbor only if at least 30% of that strip is table: within 10mm of the table plane found in the first view. Floor (about 270mm lower), walls, and empty space beyond the depth range don't count. The next position visited is always the nearest one still waiting. On armfarm14 the survey visited 9 of the 10 grid positions; the 10th was over the floor.
+The survey doesn't visit every grid position. It starts at the reachable position nearest the camera, which must be over the table. After each view, it looks at the strip of points toward each of the four neighboring positions, beyond a quarter of the way there, and goes to a neighbor only if at least 30% of that strip is table: within 10mm of the table plane found in the first view. Floor (about 270mm lower), walls, and empty space beyond the depth range don't count. The next position visited is always the nearest one still waiting.
 
 #### Finding objects in each view
 
 Each view is processed on its own:
 
 1. **Points:** back-project the depth image to world points ([§5.5](#55-placing-each-view-in-the-world)), dropping "flying pixels" next to depth jumps.
-2. **Table:** fit a plane with RANSAC (3 points at a time, 4mm inlier distance), keeping only a plane within 10° of horizontal.
+2. **Table:** fit a plane with [random sample consensus](https://en.wikipedia.org/wiki/Random_sample_consensus) (RANSAC, in [`recon/scene.py`](recon/scene.py); 3 points at a time, 4mm inlier distance), keeping only a plane within 10° of horizontal.
 3. **Candidates:** keep points 8-500mm above the table, inside the search region, and at least 250mm from the arm's base (100mm closer than `min_base_distance`, so an object near that line keeps its near side); average them into 2mm voxels; remove statistical outliers.
-4. **Clusters:** group them with DBSCAN (points within 10mm of each other belong together), then join clusters whose footprints overlap (one object split by a shadow or missing depth).
+4. **Clusters:** group them with [density-based spatial clustering of applications with noise](https://en.wikipedia.org/wiki/DBSCAN) (DBSCAN, in [`recon/scene.py`](recon/scene.py); points within 10mm of each other belong together), then join clusters whose footprints overlap (one object split by a shadow or missing depth).
 5. **Boxes:** for each cluster, the smallest rectangle around its footprint (rotating calipers on its convex hull), leaving out the 2% of its points farthest from its middle so a few strays can't stretch or turn it, gives the center, length, width and heading; the height runs from the table to the 98th-percentile top. A cluster whose center is within `min_base_distance` (350mm) of the arm's base is the arm or its cables, and is dropped. Its median color is printed with its id (green, yellow, ...), only to help a person tell objects apart; nothing selects or treats objects by color, and `--objects` takes ids.
 6. **Scan targets only.** Not everything standing on a table is something to scan. There is no size limit: whether an object can be scanned all around is up to the view planner (§5.2), and an object too wide for the gripper is simply never relocated. A cluster is skipped, with its reason printed, if it is:
    - under 25mm tall (cords, cables lying flat);
@@ -377,7 +389,7 @@ Unseen cells are judged separately because a tall object hides some table from t
 
 The same object appears in several views. Each object is taken from the view that saw it closest to straight below the camera, where it is least distorted; any other detection whose center falls within that object's footprint (plus 15mm) is the same object or a fragment of it. Objects are detected per view, not after merging the views' point clouds: when the camera calibration was off, merged clouds smeared each block into a box over 100mm wide ([§8.2](#82-detection)). One limit: in steep, oblique views a real block's own sides and shadow fill part of its ring, so it may only pass the open-table test from a view more directly above it. The overhead grid provides one for anything on the table.
 
-**Views must agree.** A patch of bad depth can look like a small object in one view: on bare, textureless table near an image's edge, the RealSense sometimes reads a blob 30mm too close. So an object is kept only if at least half of the survey views that saw its spot saw something standing there: the highest points (95th percentile) within its outline reaching half its height. The whole outline counts, not just its middle, so a bowl passes by its rim. On armfarm14's saved surveys, every such phantom (gray, about 25-30mm, over empty table) stood in only 1 of 3-5 views, and every real object, including the black printed sphere and bowl, in at least half.
+**Views must agree.** A patch of bad depth can look like a small object in one view: on bare, textureless table near an image's edge, the RealSense sometimes reads a blob 30mm too close. So an object is kept only if at least half of the survey views that saw its spot saw something standing there: the highest points (95th percentile) within its outline reaching half its height. The whole outline counts, not just its middle, so a bowl passes by its rim. In the saved surveys, every such phantom (gray, about 25-30mm, over empty table) stood in only 1 of 3-5 views, and every real object, including the black printed sphere and bowl, in at least half.
 
 **A numbered map.** Each survey also saves `survey_map.png` in its session (and shows it in the live viewer): the table from straight above, put together from the survey views (each 1.5mm cell takes its color from the view looking most directly down on it), with each scan target boxed in green and numbered as the terminal lists it, and each obstacle outlined in gray. `tools/survey_map.py data/<session>` draws one for an older session.
 
@@ -394,7 +406,7 @@ The table plane kept for the session is the one from the view closest to the obj
 
 #### The calibration board
 
-Every survey view is also searched for the ChArUco board. If it's found, the survey checks the board looks level (it lies on the table, so through a correct camera mount it must), then moves straight over the board's center, 330mm up, for a head-on view with all 88 inner corners in the image. It records the board's pose, how well its corners fit, and a depth check against it. On armfarm14: 88 of 88 corners, 0.27px reprojection error, 0.5° from level, and depth within 0.21mm (median) of the board.
+Every survey view is also searched for the ChArUco board. If it's found, the survey checks the board looks level (it lies on the table, so through a correct camera mount it must), then moves straight over the board's center, 330mm up, for a head-on view with all 88 inner corners in the image. It records the board's pose, how well its corners fit, and a depth check against it.
 
 #### Speed
 
@@ -411,11 +423,11 @@ Every candidate pose is sent to Viam's builtin motion service as a **plan-only**
 
 ### 5.3 Relocation
 
-If coverage is too low, the planner looks for a free scan station where the object would be fully coverable, finds a top-down grasp across the object's narrow side, checks the approach, grasp and place poses, and carries the object there (attached to the gripper in the planner's world state, so the carried object avoids obstacles too). After scanning, it puts the object back. **This is implemented but disabled** (`[relocate] enabled = false`) until the gripper's opening, fingertip offset and jaw direction are measured; on armfarm14 every object so far was fully coverable in place.
+If coverage is too low, the planner looks for a free scan station where the object would be fully coverable, finds a top-down grasp across the object's narrow side, checks the approach, grasp and place poses, and carries the object there (attached to the gripper in the planner's world state, so the carried object avoids obstacles too). After scanning, it puts the object back. **This is implemented but disabled** (`[relocate] enabled = false`) until the gripper's opening, fingertip offset and jaw direction are measured; so far every object has been fully coverable in place.
 
 ### 5.4 Stop-and-go capture
 
-At each view: move, wait until the arm reports it has stopped, wait 0.6s more, then take 5 frames and keep the per-pixel median depth. Frames count only if the camera **stamped them after the settle time, by the robot's own clock**, so nothing captured while moving can slip in. The camera pose is read after settling and checked against the arm controller ([§11](#11-working-safely-on-a-shared-real-arm)). Each view is saved as `color.jpg`, `depth.png` (16-bit millimeters) and `view.json` (pose, joints, timestamps, camera mount). Each view also gets a colored `depth_preview.jpg` for looking at, since a 16-bit depth image looks almost black in an image viewer.
+At each view: move, wait until the arm reports it has stopped, wait 0.6s more, then take 5 frames and keep the per-pixel median depth. Frames count only if the camera **stamped them after the settle time, by the robot's own clock**, so nothing captured while moving can slip in. The camera pose is read after settling and checked against the arm controller ([§10](#10-working-safely-on-a-shared-real-arm)). Each view is saved as `color.jpg`, `depth.png` (16-bit millimeters) and `view.json` (pose, joints, timestamps, camera mount). Each view also gets a colored `depth_preview.jpg` for looking at, since a 16-bit depth image looks almost black in an image viewer.
 
 ### 5.5 Placing each view in the world
 
@@ -443,7 +455,7 @@ Every point in every mesh goes through the camera's calibration, so its errors l
 
 The arm's end pose $E$ comes from the arm's joint angles and kinematics (the xArm6 repeats to about 0.1mm), so the camera pose for a view is $T_\text{world←camera} = E\,M$.
 
-**The camera frame in the Viam app is only for its 3D scene.** Every move targets the arm's end, computed from where the camera should be through our calibrated mount, and every captured pose is the arm controller's end pose combined with the same mount (`calibration/armfarm14_camera_mount.json`, set in `config.toml`). So recalibrating never means editing the machine's configuration.
+**The camera frame in the Viam app is only for its 3D scene.** Every move targets the arm's end, computed from where the camera should be through our calibrated mount, and every captured pose is the arm controller's end pose combined with the same mount (the file named by `[machine] camera_mount_file` in `config.toml`). So recalibrating never means editing the machine's configuration.
 
 #### The camera model
 
@@ -500,7 +512,7 @@ with a Huber loss $\rho$, starting from the current mount (within a few cm and d
 
 **Choosing the views.** The command first finds the board (from where the camera is, then from overhead positions using color-only images, about 0.15s each), looks at it head-on, and checks it looks level: a mat on the table must be level, so if it isn't, the mount in use is wrong and the command stops. Through the camera frame entered in the Viam app (θ 129.489°, [§8.1](#81-hardware-and-platform)), the mat looked 10.5° from level; through the scan-calibrated mount, 0.5-0.8°. It then plans views from 300-460mm away and from many directions (hand-eye calibration needs the wrist to rotate about different axes between views), keeps 12 that are reachable and spread out, and captures them. On synthetic corners with 0.3px noise it recovers a known mount to within 1mm / 0.1° from a start 20mm / 3° off.
 
-#### Results on armfarm14
+#### Results
 
 | | Value |
 |---|---|
@@ -513,16 +525,16 @@ with a Huber loss $\rho$, starting from the current mount (within a few cm and d
 - **The two calibrations agree to 4.7mm / 0.5°**, from entirely different data (object geometry vs. a printed pattern).
 - **Depth on a flat surface is accurate to about half a millimeter** at scanning distances (at 300mm the fit gives −0.6mm).
 - **The remaining 1.6px** (about 0.6mm at 350mm) is larger than single views' 0.1-0.3px. The most likely cause is the arm's absolute accuracy, which is worse than its 0.1mm repeatability.
-- **Neither explains the cylinder's size error** ([§3.5](#35-the-real-cylinder-against-calipers)). With the 2px edge filter, the cylinder rebuilt with the scan-based mount is 32.22mm wide, with the board mount 32.52mm, and with the board's depth correction as well 32.90mm (calipers 29.53mm). So the mount and the flat-surface depth are good to well under a millimeter, and the extra ~1.3mm per side comes from how the RealSense measures object walls and edges.
+- **Neither explains the cylinder's size error** ([§3.4](#34-the-real-cylinder-against-calipers)). With the 2px edge filter, the cylinder rebuilt with the scan-based mount is 32.22mm wide, with the board mount 32.52mm, and with the board's depth correction as well 32.90mm (calipers 29.53mm). So the mount and the flat-surface depth are good to well under a millimeter, and the extra ~1.3mm per side comes from how the RealSense measures object walls and edges.
 
 The board mount hasn't replaced the scan-based mount yet (that is `--save-mount`).
 
 #### The gripper: touch-off
 
 > [!NOTE]
-> The gripper was taken off on 2026-10-29 (`[machine] gripper = ""`): without it the camera reaches many more views. The touch-off is off until a gripper is back ([§15.8](#158-also)); the code and the measurements below are kept.
+> The gripper was taken off on 2026-10-29 (`[machine] gripper = ""`): without it the camera reaches many more views. The touch-off is off until a gripper is back ([§13.8](#138-also)); the code and the measurements below are kept.
 
-The planner keeps the gripper off the table using the gripper's collision model; if the real fingertips reach further, it can drive them into the table. `scan.py touch-off` measures the real reach the way machinists set up a tool: at three spots of bare table, clear of everything the survey saw, the closed gripper comes straight down and then steps 1mm at a time while you slide a sheet of paper under the fingertips, until it drags. On armfarm14 the fingertips reach **76.2mm** past the gripper frame (three spots within 2.1mm of each other), against the model's **50mm**: 26mm further than the planner thought, the most likely reason the gripper hit the table on the low views ([§8.1](#81-hardware-and-platform)). The result goes to `calibration/armfarm14_touch_off.json`, and every plan's table slab ([§11](#11-working-safely-on-a-shared-real-arm)) adds the extra reach to its margin.
+The planner keeps the gripper off the table using the gripper's collision model; if the real fingertips reach further, it can drive them into the table. `scan.py touch-off` measures the real reach the way machinists set up a tool: at three spots of bare table, clear of everything the survey saw, the closed gripper comes straight down and then steps 1mm at a time while you slide a sheet of paper under the fingertips, until it drags. On the test arm, the fingertips reach **76.2mm** past the gripper frame (three spots within 2.1mm of each other), against the model's **50mm**: 26mm further than the planner thought, the most likely reason the gripper hit the table on the low views ([§8.1](#81-hardware-and-platform)). The result is saved in `calibration/`, and every plan's table slab ([§10](#10-working-safely-on-a-shared-real-arm)) adds the extra reach to its margin.
 
 #### References
 
@@ -533,7 +545,7 @@ The planner keeps the gripper off the table using the gripper's collision model;
 - OpenCV: [ChArUco detection tutorial](https://docs.opencv.org/4.x/df/d4a/tutorial_charuco_detection.html), [calib3d module (solvePnP, calibrateHandEye)](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html)
 - calib.io: [calibration pattern generator](https://calib.io/pages/camera-calibration-pattern-generator) (ChArUco boards, DICT_4X4 to DICT_7X7)
 - Intel RealSense: [tuning depth cameras for best performance](https://dev.intelrealsense.com/docs/tuning-depth-cameras-for-best-performance) (depth accuracy vs. distance, edge effects)
-- Viam's `viam:camera-calibration` module (ChArUco pose tracker and hand-eye service), suggested for comparison ([§15.4](#154-calibration-that-just-works))
+- Viam's `viam:camera-calibration` module (ChArUco pose tracker and hand-eye service), suggested for comparison ([§13.4](#134-calibration-that-just-works))
 
 #### Our solver vs. Viam's camera-calibration module
 
@@ -554,7 +566,7 @@ Ours is slightly closer to the calipers on both objects, but by only 0.2-0.3mm: 
 
 ### 5.7 Stitching: aligning the views
 
-After calibration, views still disagree by about a millimeter (arm accuracy, calibration leftovers). Fusing them as-is would average slightly shifted copies of each surface into ripples. The alignment step solves for all the per-view corrections **Cᵢ** at once:
+After calibration, views still disagree by about a millimeter (arm accuracy, calibration leftovers). Fusing them as-is would average slightly shifted copies of each surface into ripples. The alignment step, a joint form of [iterative closest point](https://en.wikipedia.org/wiki/Iterative_closest_point) (ICP, in [`recon/reconstruct.py`](recon/reconstruct.py)), solves for all the per-view corrections **Cᵢ** at once:
 
 1. Each view's points near the object (plus a 10mm ring of table) are downsampled to 2mm, cleaned, and given surface normals.
 2. Every pair of views pointing within 60° of each other is an overlapping pair. For 1500 points per pair, the nearest point in the other view with a similar normal is a match.
@@ -563,7 +575,7 @@ After calibration, views still disagree by about a millimeter (arm accuracy, cal
 5. Gauss-Newton solves all corrections together (6 numbers per view), re-matching each iteration while the match distance shrinks from 6mm to 3mm, for up to 25 iterations. Rotations are measured about the object's center, not the robot's base 500mm away, so they mean something physically.
 6. Any correction over 15mm or 5° is rejected and that view keeps its arm pose. On the real, calibrated cylinder, 1 of 25 views was rejected.
 
-On synthetic views this cuts the relative pose error from 1.87mm to 0.48mm, and it is the difference between the two meshes in [§3.4](#34-the-two-fixes-that-mattered-most).
+On synthetic views this cuts the relative pose error from 1.87mm to 0.48mm, and it is the difference between the two meshes in [§3.3](#33-the-two-fixes-that-mattered-most).
 
 ### 5.8 Fusing the views (TSDF)
 
@@ -581,7 +593,7 @@ Each view's depth map is then cropped to the object: inside its box (plus 12mm) 
 - **Readings are averaged, not thrown out.** Each voxel keeps a weighted average of every view's signed distance, so random noise cancels. The surface is where the average crosses zero (marching cubes).
 - **Data is thrown out before and after fusion, not inside it:** before, pixels at and within 2px of depth edges (below) and anything outside the object's box or below its table; after, surface seen by fewer than 2 views, and small fragments.
 
-**The edge filter** works on each depth *image*, not on the table. Wherever depth jumps between neighboring pixels (an object's outline against the table behind it), the RealSense's readings are unreliable: some pixels float between the near and far surface ("flying pixels"), and a few pixels further in, stereo matching blends foreground and background, pushing the object's outline outward ("edge fattening"). On the real cylinder, wall points within 3 pixels of the outline sat 2.3mm too far out. The filter's thresholds (a 5mm or 2% jump) and its 2px growth were chosen for the RealSense; another camera has different edge behavior, so they need testing again with it ([§15.7](#157-a-second-camera-the-orbbec-astra-2)). The filter drops pixels at a jump of more than 5mm (or 2% of the distance), plus 2 pixels beyond (`[reconstruct] edge_grow`); pixels without a reading are never edges. It is unrelated to the survey's table-edge rule ([§5.1](#51-survey-finding-the-table-and-whats-on-it)), which decides where the *table* ends so the survey doesn't look at the floor.
+**The edge filter** works on each depth *image*, not on the table. Wherever depth jumps between neighboring pixels (an object's outline against the table behind it), the RealSense's readings are unreliable: some pixels float between the near and far surface ("flying pixels"), and a few pixels further in, stereo matching blends foreground and background, pushing the object's outline outward ("edge fattening"). On the real cylinder, wall points within 3 pixels of the outline sat 2.3mm too far out. The filter's thresholds (a 5mm or 2% jump) and its 2px growth were chosen for the RealSense; another camera has different edge behavior, so they need testing again with it ([§13.7](#137-a-second-camera-the-orbbec-astra-2)). The filter drops pixels at a jump of more than 5mm (or 2% of the distance), plus 2 pixels beyond (`[reconstruct] edge_grow`); pixels without a reading are never edges. It is unrelated to the survey's table-edge rule ([§5.1](#51-survey-finding-the-table-and-whats-on-it)), which decides where the *table* ends so the survey doesn't look at the floor.
 
 That is `observed.obj`: everything in it was measured, and it is open wherever nothing was seen.
 
@@ -598,61 +610,59 @@ Before closing, scraps of table are dropped: points less than 15mm above the tab
 
 Poisson can't close a thin sliver, such as 2 views of a pumpkin's top: it balloons into a surface far bigger than the object. A closed mesh that reaches more than 20mm past the points it was fit to (checked after flattening onto the table) is discarded, and the result says "too little seen to close" instead of reporting a meaningless volume.
 
-The final `mesh.obj` is a screened Poisson surface fit through the observed surface points (with their normals), plus points filling the bottom (normals pointing down), plus straight-wall points only where no observed surface lies within 3mm. The lowest 5mm of observed surface is replaced by the straight-wall prior (depth pixels where wall meets table flare outward), anything below the table is flattened onto it, and the outline is shrunk by 1mm because edge noise pads it. The result is closed (no open edges), so it has a volume. [§6](#6-measured-vs-filled-in) shows which parts are measured and which are filled in.
+The final `mesh.obj` is a screened Poisson surface fit through the observed surface points (with their normals), plus points filling the bottom (normals pointing down), plus straight-wall points only where no observed surface lies within 3mm. The lowest 5mm of observed surface is replaced by the straight-wall prior (depth pixels where wall meets table flare outward), anything below the table is flattened onto it, and the outline is shrunk by 1mm because edge noise pads it. The result is closed (no open edges), so it has a volume. [§6.2](#62-measured-vs-filled-in-observedobj-and-meshobj) shows which parts are measured and which are filled in.
 
 **Example: the pumpkin (real scan, 2026-10-28, 30 views).** The 25° views saw the side facing the arm's base down to about 15mm above the table, curving in from a radius of 85mm at the widest point to about 62mm. The first version of this closing hung its walls from the widest outline anyway, so the closed mesh was a cylinder of radius 87-91mm all the way down, and the pumpkin looked projected onto the table. With the walls hung from the lowest seen surface, the closed mesh follows the measured curve on that side (radius 67-74mm in the lowest 30mm; a second scan of the same pumpkin gave 69-74mm). The far side had too few 25° views (out of reach, 590-640mm from the base), so nothing below its widest point was measured, and its wall still drops straight from the outline (radius 86-88mm).
 
-### 5.10 Measuring quality
+---
+
+## 6. Evaluating and Tuning
+
+### 6.1 Measuring quality
 
 `scan.py progression` aligns all views once, then fuses the first *k* views for every *k* (adding each next view from the most different direction, so 3 views means 3 different sides). Each subset keeps surface seen by at least min(2, *k*) of its views: the single view keeps everything it saw, so the 1-view mesh is the best one view can give, and 2 or more views keep only what at least 2 of them agree on. `--min-views` overrides this for every subset.
 
 | Metric | What it measures | Needs ground truth? |
 |---|---|---|
-| **Roughness** | Median RMS distance of 3mm surface patches from their best-fit plane. Measured only on the patch the first view saw, which every subset includes, so rows compare the same surface. | No |
+| **Roughness** | Median [root mean square](https://en.wikipedia.org/wiki/Root_mean_square) (RMS) distance of 3mm surface patches from their best-fit plane. Measured only on the patch the first view saw, which every subset includes, so rows compare the same surface. | No |
 | **Deviation from final** | Distance from this subset's observed surface to the all-views closed mesh (median and 90th percentile). | No |
 | **Completeness** | Share of the all-views observed surface that this subset saw (within 2mm). It is relative: the all-views scan is 100% by definition, and a region no view ever saw (the bottom) can't count against it. That is why the figures label each panel with the measured share instead. | No |
-| **Measured share** | Share of the closed mesh's surface that lies within 2mm of measured data ([§6](#6-measured-vs-filled-in)). | No |
+| **Measured share** | Share of the closed mesh's surface that lies within 2mm of measured data ([§6.2](#62-measured-vs-filled-in-observedobj-and-meshobj)). | No |
 | **Volume** | Enclosed volume of the closed mesh. | No |
 | **Error vs. truth** | Distance from the mesh to the true shape after the best rigid fit, so it scores shape rather than placement. | Yes (synthetic) |
 
 Results go to `recon/progression/summary.csv`, with `mesh.obj` and `observed.obj` for each *k* and the first view's raw points.
 
-### 5.11 What can be tuned
+### 6.2 Measured vs. filled in: `observed.obj` and `mesh.obj`
 
-The settings that most change how smooth and how accurate the final mesh is. Every setting, with its default and an explanation, is in [`recon/config.py`](recon/config.py) (overridable in `config.toml`). "How chosen" says what each value rests on: **real** (measured on armfarm14 scans), **synthetic** (tuned on simulated scans), or **judgment** (a reasoned default, not tuned yet). Settings marked † were chosen for the RealSense and need testing again for another camera.
+Every closed mesh is part measurement and part assumption. The **measured share** is the fraction of the closed mesh's surface area that lies within 2mm of a point the camera actually measured (fused from at least 2 views). The rest, shown in orange below, comes from the two priors in [§5.9](#59-closing-the-mesh-with-a-flat-bottom): the flat bottom and straight walls where nothing was seen.
 
-| Setting | Now | What it trades | How chosen |
-|---|---|---|---|
-| `capture.frames_per_view` | 5 | More frames: less per-pixel noise (median), slower views | judgment |
-| `views.standoff` † | 280mm + object radius | Closer: more pixels on the object and less noise (it grows with distance²), but the camera can't measure closer than about 260mm | judgment |
-| `views.elevations_deg`, `views.azimuth_step_deg`, `--max-views` | 10/15/25/50/72°, 30° (61 candidates) | More views: more averaging and coverage, longer scans | **real**: 16 spread views measured every side ([§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views)) |
-| `reconstruct.edge_grow` † | 2px | Wider: removes more edge fattening, loses more wall data | **real**: 32.62 → 32.22mm diameter at 2px, nothing gained beyond |
-| `reconstruct.voxel` † | 1.5mm | Smaller: finer detail and sharper edges, but fewer readings per voxel (noisier) and more memory | judgment |
-| `reconstruct.sdf_trunc` † | 6mm (4 voxels) | Wider: views that disagree still overlap and average (smoother), but thin parts blur together; narrower: sharper, but small misalignments leave holes or double walls | judgment |
-| `reconstruct.min_views` | 2 | Higher: only surface confirmed by more views (cleaner, more holes) | judgment |
-| `reconstruct.align` | true | The alignment step on or off ([§3.4](#34-the-two-fixes-that-mattered-most): off was closer to the calipers on one cylinder) | open question |
-| `reconstruct.closing` | flat_bottom | `flat_bottom`, `poisson` (Poisson through the measured surface alone) or `none` (the observed surface, open) | judgment |
+Every scan writes two meshes of each object (in `data/<session>/object_NN/recon/`), built from the same fused data:
 
----
-
-### 5.12 Watching a scan live
+- **`observed.obj` is only what was measured.** It is the surface the TSDF fusion extracted where at least 2 views agreed ([§5.8](#58-fusing-the-views-tsdf)), and nothing else. Where the camera never looked it is simply open: there is no bottom (the object stands on it), and the red edges in the figure mark where measurement stops. Its bottom rim is ragged because the fusion keeps walls down to 2.5mm above the table and the views disagree a little on where that is.
+- **`mesh.obj` is the finished, closed model.** It adds the two assumptions of [§5.9](#59-closing-the-mesh-with-a-flat-bottom) (a flat bottom on the table, and straight walls down to it where unseen) and rebuilds one watertight surface through everything with screened Poisson reconstruction. Orange marks what was filled in rather than measured.
 
 <p align="center">
-  <img src="media/images/live_viewer.png" alt="The viewer in a browser: the pumpkin's final mesh in color; the first view's point cloud; the RGB-D camera's height view from straight above, the pumpkin's top in red, with axes in its corner; and the monitoring panel showing the Viam logo" width="1000">
-  <br><sub><b>REAL DATA.</b> The pumpkin's scan (2026-10-30) in <code>data_viewer.py</code></sub>
+  <img src="media/images/observed_vs_closed_block.png" alt="Orange block: observed.obj from the side and from below is open at the bottom with a ragged red-edged rim; mesh.obj from the side and below is closed, gray-blue on the walls and top, with an orange flat bottom" width="1000">
+  <br><sub><b>REAL DATA.</b> Orange block, 34 views, 2026-10-28</sub>
 </p>
 
-Every arm run (`scan.py`, `calibration.py`) starts a small web server on this computer and prints its link, `http://localhost:8765`. The page follows the scan:
+<p align="center">
+  <img src="media/images/observed_vs_closed_cylinder.png" alt="Green cylinder: observed.obj is an open tube with no bottom; mesh.obj is closed with an orange flat bottom" width="1000">
+  <br><sub><b>REAL DATA.</b> Green cylinder, 34 views, 2026-10-28</sub>
+</p>
 
-- **Mesh**, in 3D, gray or in color: each captured view is fused into a preview while the arm moves on, so the scan takes no longer. The preview skips the alignment and closing, so it is roughly the final `observed.obj`. **Final mesh** shows the closed `mesh.obj` once the scan is done.
-- **Point cloud**, in 3D: the latest view's points near the object, or every view so far.
-- **RGB-D Camera Feed**: the latest capture, as color, as depth, or by height above the table; **Map** shows the survey's numbered map (§5.1).
-- **Monitoring camera**: an optional second camera that watches the whole cell (any Viam camera component, `[live] monitor_camera`), streamed as live video.
-- **Pause** holds the arm still before its next move; **End Scan** ends the run before the next move; **STOP** halts the arm at once, mid-move (`arm.stop()`). The e-stop remains the real safety.
+| | `observed.obj` | `mesh.obj` |
+|---|---|---|
+| What it contains | Measured surface only (seen by 2+ views) | Measured surface plus a flat bottom and straight-wall fill, as one surface |
+| Closed (watertight)? | No: open bottom, and holes wherever nothing was seen | Yes: has a volume, can be 3D printed or used for collision and grasp planning |
+| Block, 34 views | 9,567 triangles, 77cm² of surface, 0.7MB | 32,488 triangles, 92cm², 2.2MB, 86% on measured data |
+| Cylinder, 34 views | 8,312 triangles, 65cm², 0.6MB | 26,460 triangles, 76cm², 1.8MB, 87% on measured data |
+| Use it to | Judge what the camera actually captured, and measure accuracy without assumptions | Use the object: volume, simulation, printing, planning around it |
 
-**Watching a saved scan:** `python data_viewer.py` (the most recent scan) or `python data_viewer.py 20261030-110809` shows a finished scan on the same page, stepping through its views, with the final mesh. Nothing talks to a robot.
+Most of the difference in area (15cm² for the block, 11cm² for the cylinder) is the bottom, which the camera can never see. `mesh.obj` also has about three times as many triangles: Poisson builds its surface on a finer, uniform grid instead of reusing the fusion's triangles. Both are smoothed only lightly (5 Taubin steps on the observed surface, which barely change its size), so both keep the RealSense's few-tenths-of-a-millimeter ripples.
 
-### 5.13 Comparing settings, methods and cameras
+### 6.3 Comparing settings, methods and cameras
 
 Every choice above can be compared on saved scans, offline, with one tool: [`tools/compare.py`](tools/compare.py). It rebuilds a scan several ways (or scans of the same object from different rigs), measures every result the same way, and writes a table and a side-by-side figure to `data/experiments/<time>-<name>/`:
 
@@ -672,55 +682,77 @@ python tools/compare.py data/<realsense scan> data/<orbbec scan>                
 
 `tools/compare_calibration.py` compares hand-eye calibration methods on saved board runs (§5.6).
 
-## 6. Measured vs. Filled In
+### 6.4 What can be tuned
 
-Every closed mesh is part measurement and part assumption. The **measured share** is the fraction of the closed mesh's surface area that lies within 2mm of a point the camera actually measured (fused from at least 2 views). The rest, shown in orange below, comes from the two priors in [§5.9](#59-closing-the-mesh-with-a-flat-bottom): the flat bottom and straight walls where nothing was seen.
+The settings that most change how smooth and how accurate the final mesh is. Every setting, with its default and an explanation, is in [`recon/config.py`](recon/config.py) (overridable in `config.toml`). "How chosen" says what each value rests on: **real** (measured on real scans), **synthetic** (tuned on simulated scans), or **judgment** (a reasoned default, not tuned yet). Settings marked † were chosen for the RealSense and need testing again for another camera.
 
-### 6.1 `observed.obj` vs. `mesh.obj`
-
-Every scan writes two meshes of each object (in `data/<session>/object_NN/recon/`), built from the same fused data:
-
-- **`observed.obj` is only what was measured.** It is the surface the TSDF fusion extracted where at least 2 views agreed ([§5.8](#58-fusing-the-views-tsdf)), and nothing else. Where the camera never looked it is simply open: there is no bottom (the object stands on it), and the red edges in the figure mark where measurement stops. Its bottom rim is ragged because the fusion keeps walls down to 2.5mm above the table and the views disagree a little on where that is.
-- **`mesh.obj` is the finished, closed model.** It adds the two assumptions of [§5.9](#59-closing-the-mesh-with-a-flat-bottom) (a flat bottom on the table, and straight walls down to it where unseen) and rebuilds one watertight surface through everything with screened Poisson reconstruction. Orange marks what was filled in rather than measured.
-
-<p align="center">
-  <img src="media/images/observed_vs_closed_block.png" alt="Orange block: observed.obj from the side and from below is open at the bottom with a ragged red-edged rim; mesh.obj from the side and below is closed, gray-blue on the walls and top, with an orange flat bottom" width="1000">
-  <br><sub><b>REAL DATA.</b> Orange block, 34 views, armfarm14, 2026-10-28</sub>
-</p>
-
-<p align="center">
-  <img src="media/images/observed_vs_closed_cylinder.png" alt="Green cylinder: observed.obj is an open tube with no bottom; mesh.obj is closed with an orange flat bottom" width="1000">
-  <br><sub><b>REAL DATA.</b> Green cylinder, 34 views, armfarm14, 2026-10-28</sub>
-</p>
-
-| | `observed.obj` | `mesh.obj` |
-|---|---|---|
-| What it contains | Measured surface only (seen by 2+ views) | Measured surface plus a flat bottom and straight-wall fill, as one surface |
-| Closed (watertight)? | No: open bottom, and holes wherever nothing was seen | Yes: has a volume, can be 3D printed or used for collision and grasp planning |
-| Block, 34 views | 9,567 triangles, 77cm² of surface, 0.7MB | 32,488 triangles, 92cm², 2.2MB, 86% on measured data |
-| Cylinder, 34 views | 8,312 triangles, 65cm², 0.6MB | 26,460 triangles, 76cm², 1.8MB, 87% on measured data |
-| Use it to | Judge what the camera actually captured, and measure accuracy without assumptions | Use the object: volume, simulation, printing, planning around it |
-
-Most of the difference in area (15cm² for the block, 11cm² for the cylinder) is the bottom, which the camera can never see. `mesh.obj` also has about three times as many triangles: Poisson builds its surface on a finer, uniform grid instead of reusing the fusion's triangles. Both are smoothed only lightly (5 Taubin steps on the observed surface, which barely change its size), so both keep the RealSense's few-tenths-of-a-millimeter ripples.
-
-### 6.2 How the measured share grows with views
-
-<p align="center">
-  <img src="media/images/measured_vs_filled.png" alt="Closed meshes of the real cylinder from 1, 8 and 25 views, from the side and from below. With 1 view almost all of the walls and the bottom are orange (filled in); with 8, most of the walls are measured; with 25, all walls are measured and only the bottom is filled in" width="1000">
-  <br><sub><b>REAL DATA.</b> The armfarm14 green cylinder from 1, 8 and 25 views</sub>
-</p>
-
-| Real cylinder | 1 view | 8 views | 25 views |
+| Setting | Now | What it trades | How chosen |
 |---|---|---|---|
-| Measured share | 11% | 65% | 87% |
-| Closed volume | 31.4cm³ | 50.4cm³ | 49.4cm³ |
+| `capture.frames_per_view` | 5 | More frames: less per-pixel noise (median), slower views | **real** (below) |
+| `views.standoff` † | 280mm + object radius | Closer: more pixels on the object and less noise (it grows with distance²), but the camera can't measure closer than about 260mm | judgment |
+| `views.elevations_deg`, `views.azimuth_step_deg`, `--max-views` | 10/15/25/50/72°, 30° (61 candidates) | More views: more averaging and coverage, longer scans | **real**: 16 spread views measured every side ([§3.1](#31-from-one-view-to-many)) |
+| `reconstruct.edge_grow` † | 2px | Wider: removes more edge fattening, loses more wall data | **real**: 32.62 → 32.22mm diameter at 2px, nothing gained beyond |
+| `reconstruct.voxel` † | 1.5mm | Smaller: finer detail and sharper edges, but fewer readings per voxel (noisier) and more memory | judgment |
+| `reconstruct.sdf_trunc` † | 6mm (4 voxels) | Wider: views that disagree still overlap and average (smoother), but thin parts blur together; narrower: sharper, but small misalignments leave holes or double walls | judgment |
+| `reconstruct.min_views` | 2 | Higher: only surface confirmed by more views (cleaner, more holes) | judgment |
+| `reconstruct.align` | true | The alignment step on or off ([§3.3](#33-the-two-fixes-that-mattered-most): off was closer to the calipers on one cylinder) | open question |
+| `reconstruct.closing` | flat_bottom | `flat_bottom`, `poisson` (Poisson through the measured surface alone) or `none` (the observed surface, open) | judgment |
 
-How to read it:
+#### Frames per view: 1 to 50
 
-- **The bottom is always filled in.** The camera can never see under the object. For these cylinders the bottom is 10-11% of the surface, which is why the real 25-view scan (87%) and the synthetic 37-view scan (88%) both top out just under 90%.
-- **With few views, the walls are mostly guessed.** The best single-view closed mesh looks like a plausible cylinder, but 89% of it is assumption, not data, and its volume (31.4cm³) is 36% below the 25-view result and 23% below the caliper volume. This is why the closed meshes alone would overstate what few views achieve, and why `observed.obj` is saved next to every `mesh.obj`.
-- **The measured share caught a real bug.** An earlier version of this scan was only 64% measured, with one side of the cylinder orange in every closed mesh, even with 25 views. The crop box was cutting that side off ([§8.2](#82-detection)); completeness alone couldn't show it.
-- **The priors are only right for objects shaped like these:** flat bottom, walls roughly vertical where unseen. An overhang or a hollow would be filled in wrong; the measured share says how much of the model depends on that.
+The orange block's full scan (49 views, 50 frames each, 2026-11-02), rebuilt with each view's depth as the median of its first 1, 5, 10 or all 50 frames (`tools/compare.py --vary frames=1,5,10,50`). The views and poses are the same; only the frame count changes.
+
+| Frames per view | Views disagree (median) | Roughness | Width, length error | Height error | Capture per view |
+|---|---|---|---|---|---|
+| 1 | 0.74mm | 0.115mm | +3.1, +4.4mm | +1.1mm | |
+| 5 | 0.64mm | 0.100mm | +4.0, +4.1mm | +1.0mm | about 20s |
+| 10 | 0.61mm | 0.101mm | +4.1, +4.2mm | +1.0mm | |
+| 50 | 0.58mm | 0.091mm | +4.4, +4.7mm | +1.1mm | about 2.1 minutes |
+
+- **More frames make the views agree better and the surface smoother**, by 9% from 5 to 50 frames, with most of the gain between 1 and 5.
+- **They don't make it more accurate.** From 5 to 50 frames the block gets 0.3-0.6mm wider. A likely reason, not yet confirmed: the median keeps a pixel that has a reading in at least half the frames, so with more frames more of the flickering pixels at the object's edges pass (1-3% more valid pixels near depth edges in the views checked), and edge pixels read too far out ([§3.4](#34-the-real-cylinder-against-calipers)).
+- **Views matter more than frames.** At 5 frames, going from 16 to 34 views takes the roughness from 0.124 to 0.101mm and the size error from 13.1% to 10.5%; at 34 views, going from 5 to 50 frames takes them to 0.093mm and 11.1%.
+- **The earlier 5-frame scan of the same block** (34 views, 2026-10-28, placed elsewhere on the table) has 0.119mm roughness and +3.9, +4.0mm width and length errors; the placement and views differ too, so the comparison within one scan above is the fair one.
+
+**Median, mean or trimmed mean.** The same 50 frames per view combined three ways (`--vary reconstruct.frame_combine=median,mean,trimmed --vary reconstruct.frame_min_valid=0.5,0.9`): the median (what a capture saves), the plain mean, and a trimmed mean that first drops readings more than 3 robust standard deviations from the pixel's median. A pixel is kept if it has a reading in at least 50% (the default) or 90% of the frames.
+
+| Combine | Pixel kept if read in | Roughness | Views disagree | Width, length error | Size error |
+|---|---|---|---|---|---|
+| **Median** | **50%** of frames | 0.091mm | 0.58mm | +4.4, +4.7mm | 10.8% |
+| Median | 90% | 0.106mm | 0.50mm | +3.8, +4.7mm | 10.2% |
+| Mean | 50% | 0.084mm | 0.55mm | +4.4, +4.6mm | 10.6% |
+| Mean | 90% | 0.104mm | 0.49mm | +4.1, +4.6mm | 10.3% |
+| Trimmed mean | 50% | 0.086mm | 0.57mm | +4.5, +4.8mm | 10.9% |
+| Trimmed mean | 90% | 0.105mm | 0.51mm | +3.9, +4.9mm | 10.5% |
+
+- **The mean is 8% smoother than the median** and the views agree slightly better: for random noise, averaging 50 frames beats taking their median.
+- **Trimming adds nothing:** at one pose a pixel rarely gives a wild reading. The stray points in a fused cloud come from edges and from views that disagree, not from single frames.
+- **None of them fixes the size.** The extra width is a bias that every frame repeats, so averaging can't remove it.
+- **Requiring a reading in 90% of frames** drops some flickering edge pixels (the width comes in by about 0.5mm and the views agree better), but also wall pixels that read only some of the time, so the surface gets rougher.
+
+So 5 frames stays the default; `--full-scan` is for collecting datasets like this one. Results: `data/experiments/20261102-160853-orange-frames/` and `...-161453-orange-frames-views/`, `...-165634-orange-frame-combine/`.
+
+#### Evaluating Tuning Parameters
+
+The same 49-view, 50-frame scan of the orange block, rebuilt with one setting changed at a time (defaults in bold; calipers 29.7 × 29.6 × 60.1mm):
+
+| Setting | Width, length error | Size error | Roughness | Views disagree |
+|---|---|---|---|---|
+| **Alignment on** | +4.4, +4.7mm | 10.8% | 0.091mm | 0.58mm |
+| Alignment off | +0.7, +2.5mm | 4.1% | 0.116mm | 0.95mm |
+| Edge filter 0px | +4.4, +4.5mm | 10.6% | 0.092mm | 0.58mm |
+| Edge filter 4px | +4.2, +4.2mm | 10.0% | 0.090mm | 0.58mm |
+| Edge filter 6px | +4.1, +4.0mm | 9.7% | 0.091mm | 0.56mm |
+| Grazing limit 75° | +4.4, +4.5mm | 10.6% | 0.091mm | 0.55mm |
+| Grazing limit 60° | +4.4, +4.8mm | 10.8% | 0.112mm | 0.53mm |
+| Voxel 1.0mm | +4.7, +4.8mm | 11.2% | 0.122mm | 0.56mm |
+| Voxel 2.0mm | +4.3, +4.7mm | 10.6% | 0.094mm | 0.55mm |
+
+- **Turning alignment off more than halves the size error**, but the views disagree almost twice as much and the surface is 27% rougher. The alignment makes the views agree with each other and, in doing so, makes the object bigger. The cylinder in [§3.3](#33-the-two-fixes-that-mattered-most) showed the same direction, more weakly. Two objects aren't enough to say alignment is the main source of the size error; scans of more objects, including the 3D-printed ones, will test it.
+- **A wider edge filter helps a little** (6px: 10.8% → 9.7%) without costing smoothness.
+- **The grazing limit and the voxel size barely change the size**; smaller voxels make the surface rougher.
+
+Results: `data/experiments/20261102-163728-orange-edge_grow/`, `...-164103-orange-max_incidence_deg/`, `...-164331-orange-align/`, `...-164434-orange-voxel/`.
 
 ---
 
@@ -731,7 +763,7 @@ How to read it:
 | **Start fresh instead of extending my earlier script** | Build on the earlier ViamOpenLab script | It was a single 636-line script that moved the arm but saved nothing and had no reconstruction. Its hand-written camera-to-gripper math and reach limits became unnecessary once the planner could target the camera frame and report reachability. I kept its good ideas: the credentials file, detected objects as obstacles, and previewing before moving. |
 | **Stop, settle, then capture** | Capture while moving | Earlier experience showed cleaner clouds when stopped. Frames are accepted only if stamped after settling, by the robot's clock. |
 | **Depth images + intrinsics, not the point-cloud API** | `camera.get_point_cloud()` | The full point cloud dropped the cloud connection; depth images are smaller, and owning the back-projection allows per-pixel filtering and median stacking. |
-| **Reachability from Viam's planner, plan-only** | Own IK from the arm's kinematics | The planner already knows the joint limits and the cell's collision geometry; asking it guarantees that "reachable" means the same thing at plan time and at move time. |
+| **Reachability from Viam's planner, plan-only** | Own [inverse kinematics](https://en.wikipedia.org/wiki/Inverse_kinematics) (IK) from the arm's kinematics | The planner already knows the joint limits and the cell's collision geometry; asking it guarantees that "reachable" means the same thing at plan time and at move time. |
 | **Save raw views, reconstruct offline** | Reconstruct live | Every method in this README was compared on the same captures. Robot time is the scarce resource. |
 | **Simulator with deliberate errors** | Develop on the real arm only | Ground truth makes it possible to tell "better" from "different", and the arm is shared. |
 | **Median of 5 frames per view** | 1 frame | Cuts per-pixel noise cheaply while the arm is still anyway. |
@@ -761,7 +793,7 @@ In roughly the order I ran into them. Each was found by measuring, and the numbe
 | The first touch-off: straight to each spot, with only the table as an obstacle | On the way to its first spot the gripper went through one of the blocks: the touch-off's moves didn't pass the objects to the planner. Things the survey skipped (not scan targets) weren't obstacles for *any* plan. And with the gripper model 26mm short, the "30mm above the table" start was about 4mm. | Every object, and everything else the survey sees standing on the table, is an obstacle for every plan (clutter is saved with the survey). The touch-off lifts until the fingertips are 600mm above the table, moves over a spot with 120mm of bare table around it, and comes straight down to 10mm above the table by the measured reach, then steps 1mm. |
 | The SDK's default connection check | It allows 1s for a reply; during a 1.8MB download the reply is late, and the SDK closes the channel mid-download. | Turned off for this script. A real disconnect still raises on the next call, and viam-server's session heartbeat (which stops the arm if the client disappears) is unaffected. |
 | Entering the calibrated mount in the Viam app as an orientation vector `(0.00678, -0.00574, 0.99996)`, θ 129.5° | Within 1e-4 of the pole, Viam reads θ as the *total* turn about z, ignoring the axis's longitude. The camera ended up 40.3° off, and the pose guard stopped the run before any motion. | The pose math implements Viam's pole rule (in the app's terms the value is θ 89.233°). Since then the code uses its own calibration file for the camera mount, so the app's camera frame no longer affects moves or poses. |
-| The frame system, once | During one survey, Viam's frame system reported the camera exactly at its planned target while the joint readings (and the image) put it rolled 180° away. It hasn't recurred. | A pose guard ([§11](#11-working-safely-on-a-shared-real-arm)) checks the frame system against the arm controller after every move and at every capture. |
+| The frame system, once | During one survey, Viam's frame system reported the camera exactly at its planned target while the joint readings (and the image) put it rolled 180° away. It hasn't recurred. | A pose guard ([§10](#10-working-safely-on-a-shared-real-arm)) checks the frame system against the arm controller after every move and at every capture. |
 | The first roll that worked for each pose | The first survey move would have turned the wrist 140°, and a 25-view scan wound it to −280°, tangling the camera cable. | Plan every roll, keep the one needing the least joint motion, and keep the wrist within ±200°. |
 
 ### 8.2 Detection
@@ -770,7 +802,7 @@ In roughly the order I ran into them. Each was found by measuring, and the numbe
 |---|---|---|
 | Clustering every point above the table | Flying pixels between an object's top edge and the table shifted the synthetic cylinder's center by 36mm; noise on the table formed flat fake objects. | Drop pixels next to depth jumps; require objects to stand at least 20mm tall. |
 | Merging the survey views' clouds, then detecting | With the camera-mount error, the two views placed the same block 7-26mm apart; merged, the blocks smeared into 121 × 92mm boxes (and once, into one 493 × 303mm blob). | Detect in each view; keep each object from the view that saw it most directly from above. |
-| Cropping each view to the survey's box | The survey (taken before the mount was calibrated) placed the real cylinder 17mm off. With a 12mm crop margin, every view lost the same 60-90° slice of wall: the 25-view closed mesh was only 64-73% measured. The fitted diameter came out 29-30mm, close to the true 29.5mm only by coincidence: the missing slice hid the inflation of the rest. | Refit the box from the scan's own points ([§5.8](#58-fusing-the-views-tsdf)): every 30° sector of the wall now has data and 87% is measured. That exposed the real 1.5mm-per-side size error ([§3.5](#35-the-real-cylinder-against-calipers)). |
+| Cropping each view to the survey's box | The survey (taken before the mount was calibrated) placed the real cylinder 17mm off. With a 12mm crop margin, every view lost the same 60-90° slice of wall: the 25-view closed mesh was only 64-73% measured. The fitted diameter came out 29-30mm, close to the true 29.5mm only by coincidence: the missing slice hid the inflation of the rest. | Refit the box from the scan's own points ([§5.8](#58-fusing-the-views-tsdf)): every 30° sector of the wall now has data and 87% is measured. That exposed the real 1.5mm-per-side size error ([§3.4](#34-the-real-cylinder-against-calipers)). |
 | Using the survey's table plane to separate object from table | Near the object the real table was about 7mm higher than the survey measured, so table points leaked into the object. | Fit the table per view from a ring around the object, in that view's own (aligned) pose. |
 
 ### 8.3 Stitching
@@ -801,54 +833,38 @@ In roughly the order I ran into them. Each was found by measuring, and the numbe
 |---|---|---|
 | Roughness over each subset's whole surface | It *rose* with more views (0.08 → 0.24mm), because few views see mostly the flat top and more views add the curved, noisier walls. | Roughness on the patch the first view saw, which every subset contains. |
 | Completeness alone as the coverage measure | It is relative to the all-views surface, so a slice that every view lost (the crop bug above) still scored 100%. | The measured share, which compares against the closed mesh, showed the missing side as a persistent orange band. |
-| Judging the real result by self-consistency | Round to 0.35mm, the same volume from 18 views on, views agreeing to 0.5mm: all true, and the cylinder was still 3mm too wide. | Calipers ([§3.5](#35-the-real-cylinder-against-calipers)). Consistency measures precision, not accuracy. |
+| Judging the real result by self-consistency | Round to 0.35mm, the same volume from 18 views on, views agreeing to 0.5mm: all true, and the cylinder was still 3mm too wide. | Calipers ([§3.4](#34-the-real-cylinder-against-calipers)). Consistency measures precision, not accuracy. |
 | Correcting the size error with a flat depth offset | Adding 1mm to all depth made the diameter slightly *larger* (the alignment and table fits move with it). | Measure the depth error against the ChArUco board instead of guessing ([§5.6](#56-camera-calibration)). |
 | Applying "seen by 2+ views" to every subset, including 1 view | The 1-view mesh was empty, so there was no single-view result to compare the others against. | Each subset keeps surface seen by min(2, k) views: the 1-view mesh is the best one view can give. |
 
 ---
 
-## 9. Output Files
+## 9. Setup and Usage
 
-Each reconstruction writes, in `data/<session>/object_NN/recon/`:
-
-| File | What it is |
-|---|---|
-| `mesh.obj`, `mesh.ply` | Closed mesh with a flat bottom (the final model). PLY keeps vertex colors; OBJ doesn't. |
-| `observed.obj`, `observed.ply` | Only the surface seen by 2+ views; open where nothing was seen. |
-| `cloud.ply` | The fused surface points with normals (what Poisson closes). |
-| `report.json` | Alignment corrections per view, per-view table offsets, how far each raw view lies from the result, mesh statistics. |
-| `refined_poses.json` | Each view's camera pose after alignment. |
-| `progression/views_NN/` | `mesh.*` and `observed.*` from the first N views; `views_01/raw_points.ply` is the first view's raw points. |
-| `progression/summary.csv` | The metrics in [§5.10](#510-measuring-quality) for every N. |
-
----
-
-## 10. Setup and Usage
-
-### 10.1 Prerequisites
+### 9.1 Prerequisites
 
 - Python 3.14 with the packages in [`requirements.txt`](requirements.txt) (Viam SDK, Open3D 0.20, NumPy, SciPy). `cairosvg` is optional, for PNG copies of figures.
 - A Viam machine with an arm, a depth camera whose frame is attached to the arm, the builtin motion service, and the work area's static obstacles (table, walls) as geometry in the frame system.
 
-### 10.2 Machine Configuration
+### 9.2 Machine Configuration
 
-`config.toml` holds the cell's settings; every setting and its default is documented in [`recon/config.py`](recon/config.py). For armfarm14:
+`config.toml` holds the cell's settings; every setting and its default is documented in [`recon/config.py`](recon/config.py). The values used during development:
 
 | Setting | Value | Notes |
 |---|---|---|
-| `[machine] address` | `armfarm14-main.310sld03v2.viam.cloud` | resources `arm`, `cam`, `gripper`, `builtin` |
+| `[machine] address` | `<machine>.viam.cloud` | resources `arm`, `cam`, `gripper`, `builtin` |
 | `[workspace] x_range, y_range` | −350..700, −650..350mm | clear of the walls (front x=800, side y=425) |
 | `[workspace] survey_height, survey_spacing` | 600mm, 340mm | overhead grid over the search region |
 | `[workspace] min_base_distance` | 350mm | the arm's base and the cables around it are ignored (default 200mm); an object centered past it keeps its points up to 100mm closer |
-| `[machine] camera_mount_file` | `calibration/armfarm14_camera_mount.json` | our calibrated camera mount; the app's camera frame is display-only |
+| `[machine] camera_mount_file` | `calibration/<rig>_camera_mount.json` | our calibrated camera mount; the app's camera frame is display-only |
 | `[views] standoff` | 280mm | beyond the RealSense's ~260mm minimum range |
 | `[views] min_camera_height` | 60mm | views that would bring the camera lower above the table are skipped |
 | `[capture]` | settle 0.6s, 5 frames | |
 | `[relocate] enabled` | false | until the gripper is measured |
 
-The camera mount is a 4 × 4 transform (camera pose relative to the arm's end, in mm) in `calibration/armfarm14_camera_mount.json`, written by `scan.py calibrate --save-mount` or `calibrate-board --save-mount`. Both commands also print the equivalent Viam frame values, in case you want the app's 3D scene to match; the code doesn't read them.
+The camera mount is a 4 × 4 transform (camera pose relative to the arm's end, in mm) in `calibration/<rig>_camera_mount.json`, written by `scan.py calibrate --save-mount` or `calibrate-board --save-mount`. Both commands also print the equivalent Viam frame values, in case you want the app's 3D scene to match; the code doesn't read them.
 
-### 10.3 Running step by step
+### 9.3 Running step by step
 
 The [Quick Start](#quick-start) runs everything with defaults. These are the same steps with more control, for troubleshooting and for watching the arm closely.
 
@@ -891,7 +907,7 @@ python -m pytest                                      # 101 tests, about 3 minut
 python scan.py demo --progression                     # synthetic table scene: survey, plan, render noisy views, reconstruct, score
 ```
 
-### 10.4 Commands
+### 9.4 Commands
 
 | Command | Moves the arm? | What it does |
 |---|---|---|
@@ -909,41 +925,49 @@ python scan.py demo --progression                     # synthetic table scene: s
 | `scan.py touch-off [--execute]` | with `--execute` | Touch bare table with the closed gripper (paper test) to measure the real fingertip reach (off while no gripper is mounted) |
 | `scan.py demo [--progression]` | no | Everything on synthetic data, scored against the truth |
 | `tools/camera_height_check.py [--height 100] [--execute]` | with `--execute` | A ruler check of the camera mount: the lens straight above the calibration board at a known height, with the predicted heights of the camera's face and of its collision box |
-| `tools/compare.py data/<session> [more sessions] --vary KEY=V1,V2 [--object N] [--truth NAME]` | no | Rebuild saved scans several ways (frames per view, mount, views, any setting) or compare rigs; a table and a figure ([§5.13](#513-comparing-settings-methods-and-cameras)) |
+| `tools/compare.py data/<session> [more sessions] --vary KEY=V1,V2 [--object N] [--truth NAME]` | no | Rebuild saved scans several ways (frames per view, mount, views, any setting) or compare rigs; a table and a figure ([§6.3](#63-comparing-settings-methods-and-cameras)) |
 | `tools/compare_calibration.py [data/board-...]` | no | Our hand-eye solver against Viam's (and OpenCV's other methods) on saved board runs; saves each method's mount |
 | `tools/survey_map.py data/<session>` | no | Draw the numbered map of the table for a session surveyed before maps existed |
 | `data_viewer.py [<session>] [--object N] [--seconds 3]` | no | Watch a saved scan in the viewer, as it looked while it ran, with playback and the final mesh (default: the most recent scan) |
 | `tools/depth_previews.py data/<session>` | no | Add colored `depth_preview.jpg` files to a session saved before they existed |
 | `tools/make_figures.py`, `tools/make_tsdf_diagram.py`, `tools/make_ring_diagram.py` | no | Regenerate this README's figures, the fusion diagram and the ring diagram |
 
-### 10.5 Testing
+### 9.5 Watching a scan live
+
+<p align="center">
+  <img src="media/images/live_viewer.png" alt="The viewer in a browser: the pumpkin's final mesh in color; the first view's point cloud; the RGB-D camera's height view from straight above, the pumpkin's top in red, with axes in its corner; and the monitoring panel showing the Viam logo" width="1000">
+  <br><sub><b>REAL DATA.</b> The pumpkin's scan (2026-10-30) in <code>data_viewer.py</code></sub>
+</p>
+
+Every arm run (`scan.py`, `calibration.py`) starts a small web server on this computer and prints its link, `http://localhost:8765`. The page follows the scan:
+
+- **Mesh**, in 3D, gray or in color: each captured view is fused into a preview while the arm moves on, so the scan takes no longer. The preview skips the alignment and closing, so it is roughly the final `observed.obj`. **Final mesh** shows the closed `mesh.obj` once the scan is done.
+- **Point cloud**, in 3D: the latest view's points near the object, or every view so far.
+- **RGB-D Camera Feed**: the latest capture, as color, as depth, or by height above the table; **Map** shows the survey's numbered map (§5.1).
+- **Monitoring camera**: an optional second camera that watches the whole cell (any Viam camera component, `[live] monitor_camera`), streamed as live video.
+- **Pause** holds the arm still before its next move; **End Scan** ends the run before the next move; **STOP** halts the arm at once, mid-move (`arm.stop()`). The e-stop remains the real safety.
+
+**Watching a saved scan:** `python data_viewer.py` (the most recent scan) or `python data_viewer.py 20261030-110809` shows a finished scan on the same page, stepping through its views, with the final mesh. Nothing talks to a robot.
+
+### 9.6 Output files
+
+Each reconstruction writes, in `data/<session>/object_NN/recon/`:
+
+| File | What it is |
+|---|---|
+| `mesh.obj`, `mesh.ply` | Closed mesh with a flat bottom (the final model). PLY keeps vertex colors; OBJ doesn't. |
+| `observed.obj`, `observed.ply` | Only the surface seen by 2+ views; open where nothing was seen. |
+| `cloud.ply` | The fused surface points with normals (what Poisson closes). |
+| `report.json` | Alignment corrections per view, per-view table offsets, how far each raw view lies from the result, mesh statistics. |
+| `refined_poses.json` | Each view's camera pose after alignment. |
+| `progression/views_NN/` | `mesh.*` and `observed.*` from the first N views; `views_01/raw_points.ply` is the first view's raw points. |
+| `progression/summary.csv` | The metrics in [§6.1](#61-measuring-quality) for every N. |
+
+### 9.7 Testing
 
 `python -m pytest` runs 101 tests, about 3 minutes. Besides unit tests (pose math against the machine's own numbers, depth decoding, edge filtering, detection, view geometry, grasp poses, the pose guard, ChArUco detection and hand-eye recovery of a known mount), several run the pipeline on synthetic scenes and check it against the truth: fused meshes beat single views, mount calibration recovers a known error, closed meshes have the right volume, and the progression improves with views.
 
----
-
-## 11. Working Safely on a Shared Real Arm
-
-The armfarm cells are shared and remote, so the code assumes that nobody may be watching the arm closely:
-
-- **Nothing moves without `--execute`.** Every command without it only looks and plans.
-- **Every move can be previewed**, with its target and the joint changes from a plan-only check, and waits for Enter. Typing `n` stops cleanly before the move.
-- **Pose guard.** At startup, after every move and at every capture, the arm's end pose according to Viam's frame system is compared with the arm controller's own. If they disagree by more than 2mm or 1°, the run stops before any further motion. (An earlier version compared camera poses, and caught a 40° camera-configuration error before the first move; camera poses now come from our own mount file.)
-- **The table is a slab 15mm above where it was measured.** The machine's configured table sat 6-11mm below the real one. Every plan (including the paths between views, not just their end points) treats the table as a slab over the whole search region, its top 15mm above the measured surface at its highest point (plus any extra fingertip reach found by the touch-off), with a 200mm square cut out around the arm's base. An earlier version added the measured table only around each object and slightly *below* its surface, and the gripper hit the table while moving between two of the lowest (25°) views; see [§8.1](#81-hardware-and-platform).
-- **The camera has its own collision boxes.** With the gripper off, nothing in the machine's model covered the wrist, and the camera frame configured in the Viam app sat 44-75mm from the real camera. Every plan attaches two boxes to the arm's end through our calibrated mount: the camera body (a RealSense plus 20mm all round) and its bracket. A plan-only test of the camera 30mm above the table was refused by the planner for exactly that.
-- **Everything on the table is an obstacle**, with a 15mm margin: the scan targets, and anything the survey skipped as a target (too big, too flat, crowded), which is saved with the survey as clutter.
-- **Wrist limit.** Camera rolls that would take the last joint past ±200° are never chosen.
-- **Every run that moves the arm starts at a ready pose.** Unless the camera is already within 10mm of it, one planned move through Viam's motion service takes the camera to the ready pose (about 322mm over the mat, looking straight down; `[machine] ready_camera_mm`), avoiding the table. It doesn't ask first: once `scan.py` starts, the only questions are which objects to scan. Ctrl+C, the live viewer's Stop, or the e-stop stops it. See the free-move incident in [§8.1](#81-hardware-and-platform).
-- **Ctrl+C sends `arm.stop()`** before disconnecting. The e-stop remains the real safety.
-- **Pause, End Scan and STOP** in the live viewer ([§5.12](#512-watching-a-scan-live)).
-- **No view puts the camera under 60mm above the table** (`min_camera_height`), checked before planning and independent of the planner's table slab.
-- **The lowest ring asks first.** Before an object's first view below 12° (the 10° ring), the scan waits at the terminal once, so the operator is watching.
-- **Relocation is off** until the gripper is measured; it hasn't been tested on hardware.
-- **Board level check.** `calibrate-board` refuses to plan views if the mat doesn't look level through the camera mount in use, which is what a wrong mount looks like.
-
----
-
-## 12. Repository Structure
+### 9.8 Repository structure
 
 ```
 calibration.py           the whole calibration in one command: camera, table, gripper
@@ -997,12 +1021,33 @@ media/                   diagrams (SVG + PNG) and figures
 
 ---
 
-## 13. Shortcomings and Proposed Solutions
+## 10. Working Safely on a Shared Real Arm
+
+The arm is shared and remote, so the code assumes that nobody may be watching the arm closely:
+
+- **Nothing moves without `--execute`.** Every command without it only looks and plans.
+- **Every move can be previewed**, with its target and the joint changes from a plan-only check, and waits for Enter. Typing `n` stops cleanly before the move.
+- **Pose guard.** At startup, after every move and at every capture, the arm's end pose according to Viam's frame system is compared with the arm controller's own. If they disagree by more than 2mm or 1°, the run stops before any further motion. (An earlier version compared camera poses, and caught a 40° camera-configuration error before the first move; camera poses now come from our own mount file.)
+- **The table is a slab 15mm above where it was measured.** The machine's configured table sat 6-11mm below the real one. Every plan (including the paths between views, not just their end points) treats the table as a slab over the whole search region, its top 15mm above the measured surface at its highest point (plus any extra fingertip reach found by the touch-off), with a 200mm square cut out around the arm's base. An earlier version added the measured table only around each object and slightly *below* its surface, and the gripper hit the table while moving between two of the lowest (25°) views; see [§8.1](#81-hardware-and-platform).
+- **The camera has its own collision boxes.** With the gripper off, nothing in the machine's model covered the wrist, and the camera frame configured in the Viam app sat 44-75mm from the real camera. Every plan attaches two boxes to the arm's end through our calibrated mount: the camera body (a RealSense plus 20mm all round) and its bracket. A plan-only test of the camera 30mm above the table was refused by the planner for exactly that.
+- **Everything on the table is an obstacle**, with a 15mm margin: the scan targets, and anything the survey skipped as a target (too big, too flat, crowded), which is saved with the survey as clutter.
+- **Wrist limit.** Camera rolls that would take the last joint past ±200° are never chosen.
+- **Every run that moves the arm starts at a ready pose.** Unless the camera is already within 10mm of it, one planned move through Viam's motion service takes the camera to the ready pose (about 322mm over the mat, looking straight down; `[machine] ready_camera_mm`), avoiding the table. It doesn't ask first: once `scan.py` starts, the only questions are which objects to scan. Ctrl+C, the live viewer's Stop, or the e-stop stops it. See the free-move incident in [§8.1](#81-hardware-and-platform).
+- **Ctrl+C sends `arm.stop()`** before disconnecting. The e-stop remains the real safety.
+- **Pause, End Scan and STOP** in the live viewer ([§9.5](#95-watching-a-scan-live)).
+- **No view puts the camera under 60mm above the table** (`min_camera_height`), checked before planning and independent of the planner's table slab.
+- **The lowest ring asks first.** Before an object's first view below 12° (the 10° ring), the scan waits at the terminal once, so the operator is watching.
+- **Relocation is off** until the gripper is measured; it hasn't been tested on hardware.
+- **Board level check.** `calibrate-board` refuses to plan views if the mat doesn't look level through the camera mount in use, which is what a wrong mount looks like.
+
+---
+
+## 11. Shortcomings and Proposed Solutions
 
 | Shortcoming | Impact | Proposed solution |
 |---|---|---|
 | **Real objects come out 1.4-2mm too large on every side** (the cylinder 32.3mm vs. 29.5mm; the block 33.5 × 33.8mm vs. 29.6 × 29.7mm). | Volumes are 15-19% high for objects this size; heights are right to about 1%. The board calibration ruled out the camera mount and flat-surface depth. | Drop pixels near depth edges (2px: 32.62 → 32.22mm on the earlier cylinder scan); weight each reading by how squarely it sees the surface; try the RealSense's own filters or a close-range camera. |
-| **Real meshes are lumpy** at a scale of a few mm to a centimeter, where synthetic ones are smooth. | Smoothing settings barely change it (Poisson depth 7-9, 5-15 smoothing steps: roughness 0.112-0.116mm), so it's in the data. The likely cause is edge fattening varying from view to view: each view pushes the wall near its own silhouette outward by up to 2mm, and the views' silhouettes fall at different places around the object. The synthetic noise is independent from pixel to pixel and has no edge fattening, so it averages away. | Weight each reading by how squarely its view sees the surface, or drop grazing readings ([§15.5](#155-telling-noise-from-surface)); compare with the calipers each time. |
+| **Real meshes are lumpy** at a scale of a few mm to a centimeter, where synthetic ones are smooth. | Smoothing settings barely change it (Poisson depth 7-9, 5-15 smoothing steps: roughness 0.112-0.116mm), so it's in the data. The likely cause is edge fattening varying from view to view: each view pushes the wall near its own silhouette outward by up to 2mm, and the views' silhouettes fall at different places around the object. The synthetic noise is independent from pixel to pixel and has no edge fattening, so it averages away. | Weight each reading by how squarely its view sees the surface, or drop grazing readings ([§13.5](#135-telling-noise-from-surface)); compare with the calipers each time. |
 | **Real noise levels off at about 0.10mm roughness.** | Beyond a few views, more views tighten the shape but don't make the surface smoother; the RealSense's noise is partly correlated across pixels and views. | Vary the views more (distances, rolls), use the RealSense's own spatial/temporal filters, or a camera better suited to close range (such as the D405). |
 | **Calibration from one object, and blind to uniform scale.** | A good fit to one scene could hide a degenerate direction, and no scan-based calibration can see an error that inflates everything equally. | Run `calibrate-board` and compare; calibrate from two or three objects. |
 | **Sharp edges are rounded** by about one voxel. | The box's error is 0.25mm vs. the cylinder's 0.07mm, and it loses 1.7% of its volume. | Smaller voxels near edges, less smoothing, or fitting planes and edges for box-like objects. |
@@ -1015,7 +1060,7 @@ media/                   diagrams (SVG + PNG) and figures
 
 ---
 
-## 14. Lessons for Other Developers
+## 12. Lessons for Other Developers
 
 - **Build a simulator with your real errors in it.** Noise alone isn't enough; add a camera-mount error, and every alignment idea can be scored against the truth before touching the robot.
 - **Calibrate the camera mount before anything else.** A 21mm / 2° mount error looked like noisy, unalignable views; no amount of per-view alignment fixes a systematic error.
@@ -1030,16 +1075,16 @@ media/                   diagrams (SVG + PNG) and figures
 
 ---
 
-## 15. Future Work
+## 13. Future Work
 
-### 15.1 Closing the size gap
+### 13.1 Closing the size gap
 
-The real cylinder is about 3mm too wide and the block about 4mm ([§3.1](#31-the-latest-scans-one-view-at-a-time-and-1-to-34-views), [§3.5](#35-the-real-cylinder-against-calipers)), even with the 25° ring, and the board calibration showed it isn't the camera mount or flat-surface depth. The block's flat faces, seen head-on, come out too far out as well, so it isn't only curved surfaces or edges. Next:
+The real cylinder is about 3mm too wide and the block about 4mm ([§3.1](#31-from-one-view-to-many), [§3.4](#34-the-real-cylinder-against-calipers)), even with the 25° ring, and the board calibration showed it isn't the camera mount or flat-surface depth. The block's flat faces, seen head-on, come out too far out as well, so it isn't only curved surfaces or edges. Next:
 
 - **Drop or down-weight readings near depth edges and at grazing angles** (the 2px edge filter takes the diameter from 32.62 to 32.22mm; wider doesn't help).
 - **Try the RealSense's own depth settings** ("High Accuracy" preset, its spatial and temporal filters), and a camera made for close range (the D405).
 
-### 15.2 Choosing the next best view
+### 13.2 Choosing the next best view
 
 The scan now visits fixed rings of viewpoints. A next-best-view planner would choose each next pose for what it is expected to add:
 
@@ -1048,13 +1093,13 @@ The scan now visits fixed rings of viewpoints. A next-best-view planner would ch
 - **Constraints already in place:** every candidate can be checked with plan-only motion requests, and travel cost can come from the planned joint change.
 - **How to judge it:** the progression metrics already measure what each added view buys. A next-best-view planner should reach, say, 85% measured or a given roughness in fewer views (and seconds) than the fixed rings, on the same objects.
 
-### 15.3 Learning which objects to scan, and how
+### 13.3 Learning which objects to scan, and how
 
 - **Recognize and separate objects** with a vision model (open-vocabulary detection and segmentation, served through Viam's ML model and vision services) instead of clustering points above the table. That also separates objects that touch, which clustering merges.
-- **Prioritize** with a vision-language model (or a VLA policy): which objects matter for the task, which are likely to be hard (shiny, transparent, thin, hollow), and which sides are probably still unseen. A model's uncertainty, or the mesh's measured share, can say which object needs more views next.
-- **Use semantic priors** where the camera can't see: a mug has a handle and a hollow inside; a box has flat, square faces. These could replace the generic straight-wall prior ([§6](#6-measured-vs-filled-in)) for known object types.
+- **Prioritize** with a vision-language model (or a [vision-language-action](https://en.wikipedia.org/wiki/Vision-language-action_model) (VLA) policy: a model that takes camera images and a task described in words and outputs the robot's actions directly): which objects matter for the task, which are likely to be hard (shiny, transparent, thin, hollow), and which sides are probably still unseen. A model's uncertainty, or the mesh's measured share, can say which object needs more views next.
+- **Use semantic priors** where the camera can't see: a mug has a handle and a hollow inside; a box has flat, square faces. These could replace the generic straight-wall prior ([§6.2](#62-measured-vs-filled-in-observedobj-and-meshobj)) for known object types.
 
-### 15.4 Calibration that just works
+### 13.4 Calibration that just works
 
 - **Board-based:** run `calibrate-board` routinely (and on a schedule), and keep its mount, depth model and intrinsics check with each session.
 - **Known objects:** a caliper-measured object, such as this cylinder, is itself a calibration target: fit the depth model so the scanned object matches its known size.
@@ -1063,7 +1108,7 @@ The scan now visits fixed rings of viewpoints. A next-best-view planner would ch
 - **A 3D-printed calibration artifact:** a shape designed for this job and printed with precisely known dimensions (flat faces at several angles, a sphere or cylinder, steps of known height, a few sharp edges). Scanning around it gives ground truth for every part of the pipeline at once: the mount and the depth error (fit so the scan matches the design), the edge fattening (from its edges), and the meshing choices (smoothing, voxel size and edge handling, scored against the true shape).
 - **Watch for drift:** RealSense depth changes with temperature and time, so re-check (the level test takes one frame) and warn when it changes.
 
-### 15.5 Telling noise from surface
+### 13.5 Telling noise from surface
 
 Fusion averages every reading that lands near the surface. That cancels random noise, but a bad reading still pulls its voxels' average a little, and a consistently bad one (a flying pixel that keeps reappearing, a reflective spot) can survive into the mesh. Ways to recognize and drop such readings instead of averaging them in:
 
@@ -1072,7 +1117,7 @@ Fusion averages every reading that lands near the surface. That cancels random n
 - **Use viewing angle:** readings of a surface seen at a grazing angle are noisier (and the edge fattening is worst there), so weight each reading by how squarely its view sees the surface.
 - **Use robust fusion:** combine readings with a median-like (robust) average rather than a plain mean, so a minority of bad readings can't move the surface.
 
-### 15.6 Two arms
+### 13.6 Two arms
 
 Use a second arm to hold and turn the object while the camera arm scans it, or hold the camera still and let one arm present every side of the object. That would see the bottom (removing the flat-bottom assumption), reach sides a single arm can't, and avoid moving the object to a scan station. It needs:
 
@@ -1081,7 +1126,7 @@ Use a second arm to hold and turn the object while the camera arm scans it, or h
 - the gripper masked out of the depth images (its geometry is known from the frame system);
 - the object's pose tracked as it moves, either from the gripper's pose or by registering each view to the growing model.
 
-### 15.7 A second camera: the Orbbec Astra 2
+### 13.7 A second camera: the Orbbec Astra 2
 
 **Getting started on the Orbbec arm:** fill in [`config_orbbec.toml`](config_orbbec.toml) (every line marked `SET`: address, credentials file, component and image-source names, workspace, and a ready pose for that arm), then `python calibration.py --config config_orbbec.toml --plan-only`, the same with the arm moving, and `python scan.py --config config_orbbec.toml`. Capture accepts depth in Viam's format or as a 16-bit PNG. Compare with `python tools/compare.py data/<realsense scan> data/<orbbec scan>`.
 
@@ -1090,7 +1135,7 @@ The next step is to scan the same objects with an Orbbec Astra 2, which is expec
 - **per view:** depth error against the ChArUco board, noise on flat table, the share of pixels with no reading, flying pixels at edges, and noise across the 5 frames taken at one pose;
 - **fused:** error against the calipers (how much too wide), wall roughness, volume, and how many views each needs to measure the whole object.
 
-### 15.8 Also
+### 13.8 Also
 
 - Scans of objects that aren't blocks: a pumpkin, a can, a water bottle, a roll of tape.
 - **A gripper again, for pick and place.** The gripper was taken off (2026-10-29) so the camera reaches more views. With one back: set `[machine] gripper`, run the touch-off again (it measures the real fingertips; the code is kept in `recon/touchoff.py`), measure the grasp width and jaw direction, and test relocation (`recon/relocate.py`, `[relocate] enabled`) on hardware.
@@ -1100,7 +1145,7 @@ The next step is to scan the same objects with an Orbbec Astra 2, which is expec
 
 ---
 
-## 16. Feedback on Viam
+## 14. Feedback on Viam
 
 ### What Worked Well
 
@@ -1187,13 +1232,13 @@ The color camera has no edge fattening: an object's outline in the color image i
 
 *Earlier text replaced by code changes, kept here for review. Newest first; each entry says what replaced it.*
 
-### 2026-10-30: the live preview's table (§5.12)
+### 2026-10-30: the live preview's table (§9.5)
 
 Replaced by cropping each view at its own table fit:
 
 > | Where the table is (pixels just above it are left out) | The survey's table | Each view's own fit of the table nearby |
 
-### 2026-10-30: the ready pose (§11, §8.1, §10)
+### 2026-10-30: the ready pose (§10, §8.1, §9)
 
 Replaced by one planned move through Viam's motion service, without a prompt, so a `scan.py` run only asks which objects to scan; the start-up "Start? [y/N]" question was removed too. Old text:
 
@@ -1207,7 +1252,7 @@ Replaced after two pumpkin surveys in a row rejected the pumpkin as "not in open
 
 > 5. **Boxes:** for each cluster, the smallest rectangle around its footprint (rotating calipers on its convex hull) gives the center, length, width and heading; the height runs from the table to the 98th-percentile top.
 
-### 2026-10-29: uncalibrated vs. calibrated table (§3.4)
+### 2026-10-29: uncalibrated vs. calibrated table (§3.3)
 
 Replaced after the closing changes of 2026-10-28 (walls from the lowest seen surface, table scraps, the balloon check): the numbers below were measured on closed meshes, which the uncalibrated views can't reliably produce any more. The new table measures the observed surface, from the table up. Old text:
 

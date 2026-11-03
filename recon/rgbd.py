@@ -90,6 +90,33 @@ def median_depth(frames: list[np.ndarray], min_valid_fraction: float = 0.5) -> n
     return np.nan_to_num(result).round().astype(np.uint16)
 
 
+TRIM_SIGMAS = 3.0  # trimmed: readings this many robust standard deviations from the median are dropped
+TRIM_FLOOR_MM = 1.0  # ...but never closer than this, so quantized, nearly constant pixels keep every reading
+
+
+def combine_depth(frames: list[np.ndarray], method: str = "median", min_valid_fraction: float = 0.5) -> np.ndarray:
+    ''' One depth image from several frames taken at one pose, per pixel over its valid
+    readings; pixels valid in fewer than `min_valid_fraction` of the frames become 0.
+    `median`; `mean`; or `trimmed`: the mean after dropping readings more than 3 robust
+    standard deviations (1.4826 × the median absolute deviation) from the median. '''
+    if method == "median":
+        return median_depth(frames, min_valid_fraction)
+    if method not in ("mean", "trimmed"):
+        raise ValueError(f"Unknown frame combination {method!r}: median, mean or trimmed")
+    stack = np.stack(frames).astype(np.float32)
+    valid = stack > 0
+    stack[~valid] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # pixels with no reading in any frame
+        if method == "trimmed":
+            median = np.nanmedian(stack, axis=0)
+            spread = 1.4826 * np.nanmedian(np.abs(stack - median), axis=0)
+            stack[np.abs(stack - median) > np.maximum(TRIM_SIGMAS * spread, TRIM_FLOOR_MM)] = np.nan
+        result = np.nanmean(stack, axis=0)
+    result[valid.mean(axis=0) < min_valid_fraction] = 0
+    return np.nan_to_num(result).round().astype(np.uint16)
+
+
 def incidence_deg(depth: np.ndarray, intrinsics: Intrinsics, step: int = 2) -> np.ndarray:
     ''' For each pixel, the angle (deg) between the surface's normal and the line of sight:
     0 seen head-on, near 90 seen edge-on. The normal comes from the depth image, from the
@@ -242,10 +269,11 @@ def save_frames(folder: Path, colors: list[bytes], depths: list[np.ndarray], col
         o3d.io.write_image(str(folder / f"depth_{index:03d}.png"), o3d.geometry.Image(np.ascontiguousarray(depth.astype(np.uint16))))
 
 
-def load_view(folder: Path, frames: int | None = None) -> View:
+def load_view(folder: Path, frames: int | None = None, combine: str = "median",
+              min_valid_fraction: float = 0.5) -> View:
     ''' A saved view. With `frames` (a full scan's raw frames, in folder/frames/), the depth
-    is rebuilt as the median of the first `frames` of them, exactly as a capture of that
-    many frames would have made it, instead of the saved median of all of them. '''
+    is rebuilt from the first `frames` of them (by default the median, exactly as a capture
+    of that many frames would have made it) instead of the saved median of all of them. '''
     folder = Path(folder)
     record = json.loads((folder / "view.json").read_text())
     color_path = next(folder.glob("color.*"))
@@ -257,12 +285,15 @@ def load_view(folder: Path, frames: int | None = None) -> View:
         if len(paths) < frames:
             raise ValueError(f"{folder} has {len(paths)} raw depth frames, fewer than {frames} "
                              "(raw frames are only saved by scan.py --full-scan)")
-        depth = median_depth([np.asarray(o3d.io.read_image(str(p))).astype(np.uint16) for p in paths[:frames]])
+        depth = combine_depth([np.asarray(o3d.io.read_image(str(p))).astype(np.uint16) for p in paths[:frames]],
+                              combine, min_valid_fraction)
     meta = {k: v for k, v in record.items() if k not in ("T_world_cam", "intrinsics")}
     if frames is not None:
         meta["frames_used"] = frames
     return View(color, depth, np.array(record["T_world_cam"]), Intrinsics(**record["intrinsics"]), meta, folder.name)
 
 
-def load_views(folder: Path, frames: int | None = None) -> list[View]:
-    return [load_view(path.parent, frames) for path in sorted(Path(folder).glob("*/view.json"))]
+def load_views(folder: Path, frames: int | None = None, combine: str = "median",
+               min_valid_fraction: float = 0.5) -> list[View]:
+    return [load_view(path.parent, frames, combine, min_valid_fraction)
+            for path in sorted(Path(folder).glob("*/view.json"))]

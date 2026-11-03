@@ -206,6 +206,12 @@ class ReconstructConfig:
     # nothing there and costs accuracy on clean data. Survey detection doesn't use it.
     # Measured on RealSense data: test again for another camera (such as the Orbbec Astra 2).
     edge_grow: int = 2
+    # How a view's raw frames become one depth image when it is rebuilt from them
+    # (tools/compare.py with frames=k): median, mean, or trimmed (the mean after dropping
+    # readings far from the median), keeping pixels with a reading in at least
+    # frame_min_valid of the frames. A capture always saves the median at 0.5. Being tested.
+    frame_combine: str = "median"
+    frame_min_valid: float = 0.5
     # Leave out depth readings where the surface is seen more steeply than this (deg
     # between the surface and the line of sight's perpendicular; 90 = keep everything).
     # Seen edge-on, at an object's silhouette, stereo depth is least reliable and tends

@@ -38,16 +38,16 @@
   <text x="370" y="240" class="cmd">scan.py plan</text>
 
   <rect x="660" y="104" width="280" height="150" rx="12" fill="#FFFFFF" stroke="#9FB3C8" stroke-width="1.5" stroke-dasharray="6 4"/>
-  <text x="678" y="132" class="name">3. Relocate (if needed)</text>
+  <text x="678" y="132" class="name">3. Relocate</text>
+  <text x="786" y="132" class="desc" font-style="italic">(not yet implemented)</text>
   <text x="678" y="156" class="desc">Coverage under 85%: grasp the</text>
   <text x="678" y="174" class="desc">object and move it to a scan</text>
   <text x="678" y="192" class="desc">station, then put it back.</text>
-  <text x="678" y="210" class="desc">Off until the gripper is measured.</text>
 
   <rect x="968" y="104" width="308" height="150" rx="12" fill="#FFFFFF" stroke="#9FB3C8" stroke-width="1.5"/>
   <text x="986" y="132" class="name">4. Capture, stop-and-go</text>
   <text x="986" y="156" class="desc">Move, stop, settle 0.6s, take the</text>
-  <text x="986" y="174" class="desc">median of 5 fresh frames, read the</text>
+  <text x="986" y="174" class="desc">median of N fresh frames, read the</text>
   <text x="986" y="192" class="desc">camera pose, check it against the</text>
   <text x="986" y="210" class="desc">arm controller. Save to disk.</text>
   <text x="986" y="240" class="cmd">scan.py scan --execute</text>

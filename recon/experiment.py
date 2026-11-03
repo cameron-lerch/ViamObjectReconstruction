@@ -94,12 +94,14 @@ def read_mount(path) -> np.ndarray:
     return np.array(json.loads(Path(path).read_text())["mount"])
 
 
-def variant_views(variant: Variant):
-    ''' The variant's views, object and table. '''
+def variant_views(variant: Variant, config: Config | None = None):
+    ''' The variant's views, object and table (raw frames combined as `config` says). '''
     session = Session(Path(variant.session))
     _, plane = session.load_scene()
     obj = scanned_object(session, variant.object_id)
-    views = load_views(session.views_dir(variant.object_id), variant.frames)
+    settings = (config or Config()).reconstruct
+    views = load_views(session.views_dir(variant.object_id), variant.frames,
+                       settings.frame_combine, settings.frame_min_valid)
     if not views:
         raise ValueError(f"No views of object {variant.object_id} in {session.root}")
     if variant.mount is not None:
@@ -182,8 +184,9 @@ def run(variants: list[Variant], config: Config, out: Path, truth: dict, truth_n
     for variant in variants:
         log.info("\n== %s ==", variant.label)
         started = time.monotonic()
-        views, obj, plane = variant_views(variant)
-        result = reconstruct(views, obj, plane, variant_config(config, variant))
+        settings = variant_config(config, variant)
+        views, obj, plane = variant_views(variant, settings)
+        result = reconstruct(views, obj, plane, settings)
         row, errors = evaluate(result, truth_name, truth, root)
         if truth_name is None and row.get("truth"):
             truth_name = row["truth"]
