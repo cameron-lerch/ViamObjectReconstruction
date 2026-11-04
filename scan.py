@@ -25,6 +25,7 @@ import argparse
 import asyncio
 import json
 import logging
+import sys
 import time
 from pathlib import Path
 
@@ -74,6 +75,17 @@ async def with_robot(config: Config, steps, confirm_moves: bool = False, confirm
             log.warning("Couldn't close the connection cleanly: %s", error or type(error).__name__)
 
 
+def resume_command(session: Path) -> str:
+    ''' This run's command line (--full-scan and all), resuming `session`. '''
+    args, options = iter(sys.argv[1:]), []
+    for arg in args:
+        if arg == "--resume":
+            next(args, None)  # and the session after it
+        elif not arg.startswith("--resume="):
+            options.append(arg)
+    return " ".join(["python scan.py", *options, "--resume", str(session)])
+
+
 async def _run_with(machine, config: Config, steps, confirm_moves: bool, confirm_above: float | None,
                     go_ready: bool) -> None:
     ''' The body of with_robot, on an open connection. '''
@@ -102,7 +114,7 @@ async def _run_with(machine, config: Config, steps, confirm_moves: bool, confirm
         try:
             latest = Session.latest(config.resolve(config.data_dir)).root
             log.error("  Every captured view is saved. Once the machine is healthy, continue with the same options:\n"
-                      "    python scan.py --resume %s", latest.relative_to(config.resolve(".")))
+                      "    %s", resume_command(latest.relative_to(config.resolve("."))))
         except Exception:
             log.error("  Every captured view is saved; continue with scan.py --resume data/<session>.")
     except asyncio.CancelledError:
@@ -282,7 +294,8 @@ async def scan_everything(robot: Robot, config: Config, execute: bool, max_views
     for obj in objects:
         others = [o for o in objects if o.id != obj.id]
         if not execute and started[obj.id]:
-            plan = await pipeline.plan_scan(robot, pipeline.scanned_object(session, obj.id), others, config)
+            layout, rotations = pipeline.saved_layout(session, obj.id, config)
+            plan = await pipeline.plan_scan(robot, pipeline.scanned_object(session, obj.id), others, layout, rotations)
             left = pipeline.missing_views(plan.views, pipeline.captured_views(session, obj.id))
             log.info("Object %d: %d views captured, %d still to capture", obj.id, started[obj.id], len(left))
             continue

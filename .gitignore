@@ -3,7 +3,7 @@ apikey*.json
 connect.py
 
 .venv/
-# OpenCV 4, only for running Viam's hand-eye solver (tools/viam_solve_batch.py)
+# OpenCV 4, only for running Viam's hand-eye solver (analysis/viam_solve_batch.py)
 .venv-opencv4/
 __pycache__/
 .pytest_cache/
@@ -15,7 +15,11 @@ data/
 TODO.md
 
 # README backups (local only)
-README_backup_*.md
+backup/
 
 # Packaged datasets (published as GitHub Release assets, not committed)
-dist/
+datasets/
+
+# Development tools (README figures and diagrams, dataset packaging, previews): local only.
+# The analysis scripts that back the README's results are in analysis/.
+tools/

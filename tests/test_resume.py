@@ -48,7 +48,7 @@ def session_with_views(tmp_path, done, frames=50):
 def run_resume(monkeypatch, session, config):
     captured = []
 
-    async def plan_scan(robot, target, others, config):
+    async def plan_scan(robot, target, others, config, rotations=None):
         return SimpleNamespace(views=[planned(0, 90), planned(0, 72), planned(30, 72), planned(60, 72)])
 
     async def capture_view(robot, folder, extra=None, frames=None, depth=True, keep_frames=False):

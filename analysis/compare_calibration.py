@@ -1,14 +1,14 @@
 ''' Compare hand-eye calibration methods on saved board runs (no robot needed).
 
-    python tools/compare_calibration.py                          # every data/board-* run
-    python tools/compare_calibration.py data/board-20261029-150236
+    python analysis/compare_calibration.py                          # every data/board-* run
+    python analysis/compare_calibration.py data/board-20261029-150236
 
 Our solver and the five OpenCV methods (Tsai is what Viam's camera-calibration module
 uses) each solve the camera mount from the same board views, and are scored by leave-
 one-out reprojection, Viam's consistency residuals, and distance from our mount (see
 recon/handeye.py). Each method's mount is saved, so a scan can be rebuilt with it:
 
-    python tools/compare.py data/<scan> --vary mount=data/experiments/<this>/mounts/<run>/ours.json,...
+    python analysis/compare.py data/<scan> --vary mount=data/experiments/<this>/mounts/<run>/ours.json,...
 
 Results: data/experiments/<time>-calibration/results.csv, summary.md, mounts/.
 '''

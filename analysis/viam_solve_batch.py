@@ -2,7 +2,7 @@
 problems at once. Called by recon/handeye.py with the OpenCV 4 environment, since our
 environment's OpenCV 5 has no cv2.calibrateHandEye:
 
-    .venv-opencv4/bin/python tools/viam_solve_batch.py <solve.py> <problems.json>
+    .venv-opencv4/bin/python analysis/viam_solve_batch.py <solve.py> <problems.json>
 
 problems.json is a list of {"stations": [...], "method": ...} in solve.py's own input
 format; prints a JSON list of its results.

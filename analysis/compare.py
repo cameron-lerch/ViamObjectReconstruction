@@ -4,22 +4,22 @@ Rebuild one scan several ways, or scans of the same object from different rigs, 
 measure each the same way. Nothing talks to a robot.
 
     # Frames per view (scans made with scan.py --full-scan keep every raw frame)
-    python tools/compare.py data/20261029-155544 --vary frames=1,5,10,50
+    python analysis/compare.py data/20261029-155544 --vary frames=1,5,10,50
 
     # Meshing and smoothing methods
-    python tools/compare.py data/20261028-093620 --vary reconstruct.closing=flat_bottom,poisson,none
-    python tools/compare.py data/20261028-093620 --vary reconstruct.smoothing=taubin,laplacian,none
+    python analysis/compare.py data/20261028-093620 --vary reconstruct.closing=flat_bottom,poisson,none
+    python analysis/compare.py data/20261028-093620 --vary reconstruct.smoothing=taubin,laplacian,none
 
     # Any setting, by its name in config.toml; several --vary give every combination
-    python tools/compare.py data/20261028-093620 --vary reconstruct.align=true,false --vary reconstruct.edge_grow=0,2,4
-    python tools/compare.py data/20261028-093620 --vary reconstruct.voxel=1.0,1.5,2.0
+    python analysis/compare.py data/20261028-093620 --vary reconstruct.align=true,false --vary reconstruct.edge_grow=0,2,4
+    python analysis/compare.py data/20261028-093620 --vary reconstruct.voxel=1.0,1.5,2.0
 
     # Number of views (spread over all directions), and camera mounts (calibrations)
-    python tools/compare.py data/20261028-093620 --vary views=8,16,all
-    python tools/compare.py data/20261029-155544 --vary mount=calibration/a.json,calibration/b.json
+    python analysis/compare.py data/20261028-093620 --vary views=8,16,all
+    python analysis/compare.py data/20261029-155544 --vary mount=calibration/a.json,calibration/b.json
 
     # Two rigs: the same object scanned with each (labels from each session's rig name)
-    python tools/compare.py data/<realsense scan> data/<orbbec scan>
+    python analysis/compare.py data/<realsense scan> data/<orbbec scan>
 
 Each scan's object 0 unless --object; ground truth found by size unless --truth (needed
 for the printed sphere and bowl: printed_sphere, printed_bowl). Results go to

@@ -1,6 +1,6 @@
 ''' Compare reconstructions of saved scans: the same views rebuilt in several variants
 (frames per view, camera mount, number of views, any setting), or scans of the same
-object from different rigs, each measured the same way. Used by tools/compare.py.
+object from different rigs, each measured the same way. Used by analysis/compare.py.
 
 A variant changes one or more of:
 - `frames`: rebuild each view's depth from its first k raw frames (scans made with

@@ -202,7 +202,7 @@ Every mesh below was rebuilt with the current pipeline, so they compare directly
 
 | Views × Frames Captured per View | Roughness (Observed / Final) | Measured | Volume | Accuracy | Notes |
 |---|---|---|---|---|---|
-| 43 × 50 | 0.135 / 0.134mm | 88% | 155.8cm³ | CAD: 1.03mm median error, +0.31mm bias; +2.5mm across the rim, +0.8mm tall | Full scan, upright |
+| 46 × 50 | 0.031 / 0.041mm | 90% | 171.9cm³ | CAD: 0.71mm median error, +0.67mm bias; +4.7mm across the rim, −0.4mm tall | Full scan, upright |
 
 <p align="center">
   <img src="media/images/objects/pumpkin.png" alt="Pumpkin: the final colored mesh on the left, and the cumulative point cloud from all of its views on the right" width="1000">
@@ -227,8 +227,6 @@ Every mesh below was rebuilt with the current pipeline, so they compare directly
 | Views × Frames Captured per View | Roughness (Observed / Final) | Measured | Volume | Accuracy | Notes |
 |---|---|---|---|---|---|
 | 39 × 5 | 0.070 / 0.075mm | 88% | 72.5cm³ | No ground truth | Open top; its walls are tucked in below the rim ([§5.8](#58-closing-the-mesh-with-a-flat-bottom)) |
-
-`python tools/make_object_gallery.py` rebuilds these images and numbers.
 
 ### 3.2 Scanning an Object with Multiple Views
 
@@ -456,7 +454,7 @@ Each survey view is processed on its own, in six steps:
 
 1. **Points:** the depth image is turned into world points ([§5.4](#54-placing-each-view-in-the-world)), dropping the "flying pixels" next to depth jumps.
 2. **Table:** a plane is fit to the points with [random sample consensus](https://en.wikipedia.org/wiki/Random_sample_consensus) (RANSAC, in [`recon/scene.py`](recon/scene.py); 3 points at a time, with a 4mm inlier distance), and only a plane within 10° of horizontal counts as the table.
-3. **Candidates:** the points 8-500mm above the table, inside the search region, and at least 250mm from the arm's base are kept. That's 100mm closer than `min_base_distance`, so an object sitting near that line keeps its near side. They're averaged into 2mm voxels, and statistical outliers are removed.
+3. **Candidates:** the points 8-500mm above the table, and inside the search region are kept. (A cluster centered within `min_base_distance`, 100mm, of the arm's base is the arm itself and is skipped.) They're averaged into 2mm voxels, and statistical outliers are removed.
 4. **Clusters:** the candidates are grouped with [density-based spatial clustering of applications with noise](https://en.wikipedia.org/wiki/DBSCAN) (DBSCAN, in [`recon/scene.py`](recon/scene.py); points within 10mm of each other belong together). Clusters whose footprints overlap are then joined, since a shadow or missing depth can split one object in two.
 5. **Boxes:** each cluster gets the smallest rectangle that fits around its footprint (rotating calipers on its convex hull), which gives its center, length, width and heading. The 2% of its points farthest from its middle are left out, so a few stray points can't stretch or turn the box. The height runs from the table to the 98th-percentile top. A cluster whose center is within `min_base_distance` (350mm) of the arm's base is the arm itself or its cables, and is dropped. Each object's median color is printed next to its id (green, yellow, ...) only to help a person tell the objects apart; nothing selects or treats objects by color, and `--objects` takes ids.
 6. **Scan targets only.** Not everything standing on a table is something to scan. There's no size limit: whether an object can be scanned all the way around is up to the view planner (§5.2). A cluster is skipped, with the reason printed, if it is:
@@ -471,7 +469,7 @@ Each survey view is processed on its own, in six steps:
 
 <p align="center">
   <img src="media/diagrams/open_table_ring.png" alt="Three panels. 1: a tall object in open table, seen from above, with a 5mm grid ring around its box; the cells behind it, away from the survey camera, are unseen (its shadow) and all the others are bare table: 100% of the seen ring is bare, 22% unseen, so it is a scan target. 2: an object at the table's edge with a cable passing by; the cells past the edge are unseen and the cable's cells are something else: 91% of the seen ring bare but 31% unseen, so it is an obstacle. 3: a side view of the survey camera 600mm up and a 200mm-tall object, whose top hides a strip of table behind it, inside the ring" width="1000">
-  <br><sub><b>DIAGRAM.</b> The cells are classified with the same rule as the code (<a href="tools/make_ring_diagram.py"><code>tools/make_ring_diagram.py</code></a>); the scenes are illustrations</sub>
+  <br><sub><b>DIAGRAM.</b> The cells are classified with the same rule as the code; the scenes are illustrations</sub>
 </p>
 
 To count as a target, at least 90% of the **seen** cells have to be bare table, and at most 25% of the ring can be unseen. A block in open table scores 98-100% bare with 0-3% unseen. The power strip at the table's edge has cables and floor around it (72-91% bare, 17-57% unseen), and cables at the edge are 31-37% unseen, so both are skipped. The 60mm band also means that two objects closer than about 60mm reject each other. Each view judges its own detections, and an object only needs to pass in one view (usually the one most nearly above it).
@@ -486,7 +484,7 @@ The same object usually shows up in several survey views. Each object is taken f
 
 **Views must agree.** A patch of bad depth can look like a small object in one view: on bare, featureless table near the edge of an image, the RealSense sometimes reads a blob 30mm too close. So an object is only kept if at least half of the survey views that saw its spot also saw something standing there, meaning the highest points (95th percentile) within its outline reach half its height. The whole outline counts, not just its middle, so a bowl passes by its rim. In the saved surveys, every one of these phantoms (gray, about 25-30mm tall, over empty table) appeared in only 1 of 3-5 views, while every real object, including the black printed sphere and bowl, appeared in at least half.
 
-**A numbered map.** Each survey also saves `survey_map.png` in its session folder and shows it in the live viewer. It's the table seen from straight above, put together from the survey views (each 1.5mm cell takes its color from the view looking most directly down on it), with each scan target boxed in green and numbered the same way the terminal lists it, and each obstacle outlined in gray. `tools/survey_map.py data/<session>` draws one for any saved session.
+**A numbered map.** Each survey also saves `survey_map.png` in its session folder and shows it in the live viewer. It's the table seen from straight above, put together from the survey views (each 1.5mm cell takes its color from the view looking most directly down on it), with each scan target boxed in green and numbered the same way the terminal lists it, and each obstacle outlined in gray.
 
 <p align="center">
   <img src="media/images/survey_map.png" alt="The table from above: the calibration board at the top, cables, the orange prism boxed in green as target 0, a small gray thing as target 1, and small obstacles outlined in gray" width="600">
@@ -518,7 +516,19 @@ Around each object, I lay out a top view plus rings of camera poses at several h
 
 The low rings are there because on rounded objects, like the pumpkin and the printed sphere, the surface below the widest point is only seen head-on from low views. Views that would put the camera less than 60mm above the table (`min_camera_height`) are dropped before planning, as a guard that doesn't depend on the planner's table model; on the test objects, the 10° ring puts the camera 81-95mm up. Before an object's first view below 12° (`views.confirm_below_deg`), the scan waits once for the operator (Enter to go on, `n` to skip those views), so that someone is watching when the arm goes that low.
 
-Coverage is scored over about 350 surface directions, leaving out the bottom.
+**Coverage** is how I judge, before the arm moves, whether the reachable views will see the whole object. It's computed from directions alone:
+
+<p align="center">
+  <img src="media/diagrams/coverage.png" alt="Three 3D panels of a block on the table under a dome of dots. 1: 345 blue dots, one per direction the surface can face, down to 9° below horizontal. 2: cameras on every planned view around the dome, some crossed out as out of reach; dots within 55° of a reachable camera turn green, the rest red, with the top view's 55° circle drawn. 3: the green and red dots, with 330 of 345 directions seen: coverage = 96%." width="1000">
+  <br><sub><b>DIAGRAM.</b> The real layout of planned views around a block, with an illustrative set of views out of reach</sub>
+</p>
+
+
+1. **Surface directions:** I spread 600 directions evenly over a sphere around the object (a [Fibonacci sphere](https://en.wikipedia.org/wiki/Fibonacci_sphere)). Each one stands for the part of the surface that faces that way. Directions pointing more than about 9° below horizontal are dropped, since that's the bottom, which rests on the table; about 350 remain.
+2. **Seen or not:** a direction counts as seen when the camera of at least one reachable view lies within 55° of it, measured from the point the views aim at. Beyond about 55°, the camera looks at that surface so obliquely that its readings get sparse and noisy.
+3. **Coverage** is the share of the directions that are seen.
+
+If the reachable views cover less than 85% (`views.min_coverage`), the planner looks for a better place on the table to move the object to (relocation, which is off for now: [§13.8](#138-moving-objects-the-arm-cant-scan-all-the-way-around)). Coverage is only an estimate: it treats the object as if every surface faced straight out from its middle, so it ignores surface that the object hides from itself, like the inside of a bowl, and how far away each surface is. That's why I check the result afterward with the **measured share**: how much of the final mesh was actually measured ([§6.2](#62-measured-vs-filled-in-observedobj-and-meshobj)). On the full scans, coverage was 100% for every object, while 87-91% of each final mesh was measured.
 
 ### 5.3 Stop-and-go capture
 
@@ -646,7 +656,7 @@ The planner keeps the gripper off the table using the gripper's collision model,
 
 #### My solver vs. Viam's camera-calibration module
 
-A technical interviewer suggested I compare my calibration with Viam's [camera-calibration](https://github.com/viam-labs/camera-calibration) module. It solves the same problem with OpenCV's closed-form hand-eye method (Tsai), working from the board's pose in each image, while mine fits the board corners' pixels directly (least squares over the mount and the board's pose together). `tools/compare_calibration.py` runs both on the same saved board views, along with OpenCV's other four methods. Viam's runs through its own `solve.py`, unchanged; it needs OpenCV 4, so it runs in a separate environment (see [`recon/handeye.py`](recon/handeye.py)).
+A technical interviewer suggested I compare my calibration with Viam's [camera-calibration](https://github.com/viam-labs/camera-calibration) module. It solves the same problem with OpenCV's closed-form hand-eye method (Tsai), working from the board's pose in each image, while mine fits the board corners' pixels directly (least squares over the mount and the board's pose together). `analysis/compare_calibration.py` runs both on the same saved board views, along with OpenCV's other four methods. Viam's runs through its own `solve.py`, unchanged; it needs OpenCV 4, so it runs in a separate environment (see [`recon/handeye.py`](recon/handeye.py)).
 
 - **Simulated, with a known mount:** every method recovers it exactly from perfect views. With 0.2px of corner noise, mine lands 0.03mm from the truth, Tsai 0.53mm, and the others 0.34-1.77mm. Fitting the pixels uses the measurements directly, while the closed-form methods work from each view's noisy board pose.
 - **On the 6 real board runs** (12 views each): every method predicts a left-out view's corners about equally well (median 1.6-2.1px; Tsai is slightly better than mine in 5 of 6 runs, by 0.1-0.2px), and Tsai's mount consistently sits 1.7-1.9mm and 0.4-0.6° from mine.
@@ -696,13 +706,26 @@ The surface that comes out of fusion is `observed.obj`. Everything in it was mea
 
 **The voxel size and the truncation band** are the fusion's two main settings. Smaller voxels keep finer detail, but each one averages fewer readings, so the surface gets noisier. The truncation band sets how far from its reading each view updates the grid: a wide band lets views that disagree by a millimeter or two still overlap and average, but it also lets the two sides of a thin wall overwrite each other; a narrow band keeps thin walls apart, but leaves gaps wherever the views disagree by more than the band. The figures below show both on the orange block (solid) and the 3D-printed bowl (a wall a few millimeters thick). The numbers are in [§6.4](#64-what-can-be-tuned). *From the full scans at the 280mm standoff; to be updated after the 320mm re-scans.*
 
+**Why the truncation band matters so much.** The band has two jobs that pull in opposite directions, and how hard each one pulls depends on the object:
+
+- **It has to be wide enough to cover how far the views disagree.** After alignment, the views still disagree by about 0.5-1.5mm, and a noisy material reads farther from the true surface. If one view's reading lands outside another's band, the two stop averaging, and the surface breaks into fragments.
+- **On a thin wall, it has to be narrower than about half the wall.** A view of the outside of a wall writes its band straight through the wall into the inside, and a view of the inside does the same in the other direction. With a band wider than half the wall, they overwrite each other, which pushes both surfaces outward and thickens the wall.
+
+So the best band depends on how noisy the object's readings are (mostly its material) and how thin its walls are. On the solid block and cylinder, there's no wall for the band to cross, and it changes their size by less than a millimeter. On the thin-walled bowl, it's the setting that changed the result most of everything I tested:
+
+- **The measured surface gets more accurate as the band narrows.** Going from the default 6mm to 2mm halved the median error against the CAD model (0.71mm to 0.38mm) and cut the diameter error from +4.7mm to +1.5mm. For comparison, alignment, and 50 frames per view instead of 1, each improved the same error by about 0.2mm.
+- **But a narrow band measures less of the bowl, and the closing adds a feature.** At 2-3mm, only 79-82% of the final mesh is measured (91% at 6mm), and the flat-bottom closing fills the unmeasured part under the bowl with straight walls down to the table, which the real bowl doesn't have (the figure below). At 4.5mm, most of the gain remains (0.49mm), with only a small stub underneath.
+- **A band that's too wide thickens the wall.** At 9mm, the median error more than doubles (1.69mm), and the bowl comes out 6.9mm too wide.
+
+That's why I don't think one band suits every object. Once I've scanned more thin-walled objects, I plan to test choosing the band per object, from its wall thickness and how noisy its readings are.
+
 <p align="center">
   <img src="media/images/tsdf_truncation_orange_block.png" alt="The orange block's final mesh with truncation bands of 2, 3, 4.5, 6 and 9mm: all similar, slightly rougher at 2mm" width="1000">
   <br><sub><b>REAL DATA.</b> The orange block's full scan, rebuilt with each truncation band</sub>
 </p>
 
 <p align="center">
-  <img src="media/images/tsdf_truncation_bowl.png" alt="The bowl's final mesh with truncation bands of 2, 3, 4.5, 6 and 9mm: at 2 and 3mm the wall falls apart into fragments, at 4.5 and 6mm it holds together, at 9mm it thickens" width="1000">
+  <img src="media/images/tsdf_truncation_bowl.png" alt="The bowl's final mesh with truncation bands of 2, 3, 4.5, 6 and 9mm: at 2 and 3mm, straight walls hang below the bowl down to the table; at 4.5mm, a small stub; at 6 and 9mm, none, and the rim thickens at 9mm" width="1000">
   <br><sub><b>REAL DATA.</b> The bowl's full scan, rebuilt with each truncation band</sub>
 </p>
 
@@ -712,7 +735,7 @@ The surface that comes out of fusion is `observed.obj`. Everything in it was mea
 </p>
 
 <p align="center">
-  <img src="media/images/tsdf_voxel_bowl.png" alt="The bowl with 1.0, 1.5 and 2.0mm voxels: at 1.0mm the closing balloons into a blob; at 1.5mm it works; at 2.0mm the closing fails and only the measured surface, with holes, is shown" width="760">
+  <img src="media/images/tsdf_voxel_bowl.png" alt="The bowl with 1.0, 1.5 and 2.0mm voxels: all three close into a similar bowl; 2.0mm comes out smoothest" width="760">
   <br><sub><b>REAL DATA.</b> The bowl's full scan, rebuilt with each voxel size</sub>
 </p>
 
@@ -747,8 +770,8 @@ The main risk with any smoothing is changing the object itself: rounding off edg
 </p>
 
 <p align="center">
-  <img src="media/images/smoothing_bowl.png" alt="The bowl's final mesh with each smoothing method; every one shows the same holes through the thin wall, which come from fusion, not smoothing" width="1000">
-  <br><sub><b>REAL DATA.</b> The bowl's full scan, its final mesh smoothed with each method. The holes through its thin wall come from fusion (above), not from smoothing</sub>
+  <img src="media/images/smoothing_bowl.png" alt="The bowl's final mesh with each smoothing method: HC Laplacian and the simple average come out smoothest; two-step sharpens the rim" width="1000">
+  <br><sub><b>REAL DATA.</b> The bowl's full scan, its final mesh smoothed with each method</sub>
 </p>
 
 The live viewer's preview mesh isn't smoothed, so that it stays fast ([§9.5](#95-watching-a-scan-live)).
@@ -805,15 +828,15 @@ Most of the difference in area (13cm² for the block and 11cm² for the cylinder
 
 ### 6.3 Comparing settings, methods and cameras
 
-To compare the choices in [§5](#5-methodology) fairly, I built one tool that works offline on saved scans: [`tools/compare.py`](tools/compare.py). It rebuilds a scan several different ways (or compares scans of the same object from different rigs), measures every result the same way, and writes a table and a side-by-side figure to `data/experiments/<time>-<name>/`:
+To compare the choices in [§5](#5-methodology) fairly, I built one tool that works offline on saved scans: [`analysis/compare.py`](analysis/compare.py). It rebuilds a scan several different ways (or compares scans of the same object from different rigs), measures every result the same way, and writes a table and a side-by-side figure to `data/experiments/<time>-<name>/`:
 
 ```bash
-python tools/compare.py data/<session> --vary frames=1,5,10,50                       # frames per view (full scans)
-python tools/compare.py data/<session> --vary reconstruct.closing=flat_bottom,poisson,none
-python tools/compare.py data/<session> --vary reconstruct.align=true,false --vary reconstruct.edge_grow=0,2,4
-python tools/compare.py data/<session> --vary views=8,16,all                         # fewer views, spread out
-python tools/compare.py data/<session> --vary mount=<a.json>,<b.json>                # calibrations
-python tools/compare.py data/<realsense scan> data/<orbbec scan>                     # two rigs
+python analysis/compare.py data/<session> --vary frames=1,5,10,50                       # frames per view (full scans)
+python analysis/compare.py data/<session> --vary reconstruct.closing=flat_bottom,poisson,none
+python analysis/compare.py data/<session> --vary reconstruct.align=true,false --vary reconstruct.edge_grow=0,2,4
+python analysis/compare.py data/<session> --vary views=8,16,all                         # fewer views, spread out
+python analysis/compare.py data/<session> --vary mount=<a.json>,<b.json>                # calibrations
+python analysis/compare.py data/<realsense scan> data/<orbbec scan>                     # two rigs
 ```
 
 - **What can vary:** `frames` rebuilds each view's depth from its first k raw frames, which `scan.py --full-scan` keeps (by default as the median; using all 50 reproduces the saved depth exactly). `mount` re-places every view with another camera mount, starting from the poses as captured. `views` uses a subset spread over all directions. Any setting can also be varied by its name in `config.toml`, and several `--vary` options give every combination.
@@ -821,7 +844,7 @@ python tools/compare.py data/<realsense scan> data/<orbbec scan>                
 - **CAD comparison** ([`recon/cad.py`](recon/cad.py)): the printed object's STL is stood on the table where the scan found it, and the scan's measured surface is fitted onto it. The fit is rigid (rotation and shift, never scale, so a scan that's too big stays too big) and is tried from 12 starting rotations. Then every measured point's signed distance from the true surface is taken, positive outside. The figure colors the surface red where it's outside and blue where it's inside. On the CAD model itself the fit is exact, and a scan made 5% too big shows a positive bias.
 - **Two rigs:** each session records its rig's name (`[machine] rig`), which is used to label it. A second rig gets its own config file ([`config_orbbec.toml`](config_orbbec.toml) is a template) with its own address, camera names, calibration file and ready pose. With no ready pose set, a run starts from wherever the arm is.
 
-`tools/compare_calibration.py` compares hand-eye calibration methods on saved board runs (§5.5).
+`analysis/compare_calibration.py` compares hand-eye calibration methods on saved board runs (§5.5).
 
 ### 6.4 What can be tuned
 
@@ -830,7 +853,7 @@ The table below lists the settings that most change how smooth and how accurate 
 | Setting | Now | What it trades | How chosen |
 |---|---|---|---|
 | `capture.frames_per_view` | 5 | More frames: less per-pixel noise (median), slower views | **real** (below) |
-| `views.standoff` † | 320mm + object radius | Closer: more pixels on the object and less noise (it grows with distance²), but the D435i's ideal range starts at 0.3m | **spec**: keeps every surface beyond 0.3m (the scans so far used 280mm, which put some surfaces at 276-300mm; a comparison is planned) |
+| `views.standoff` † | 320mm + object radius | Closer: more pixels on the object and less noise (it grows with distance²), but the D435's ideal range starts at 0.3m | **spec**: keeps every surface beyond 0.3m (the scans so far used 280mm, which put some surfaces at 276-300mm; a comparison is planned) |
 | `views.elevations_deg`, `views.azimuth_step_deg`, `--max-views` | 10/15/25/50/72°, 30° (61 candidates) | More views: more averaging and coverage, longer scans | **real**: 16 spread views measured every side ([§3.2](#32-scanning-an-object-with-multiple-views)) |
 | `reconstruct.edge_grow` † | 2px | Wider: removes more edge fattening, loses more wall data | **real**: 32.62 → 32.22mm diameter at 2px, nothing gained beyond |
 | `reconstruct.voxel` † | 1.5mm | Smaller: finer detail and sharper edges, but fewer readings per voxel (noisier) and more memory | judgment |
@@ -842,7 +865,7 @@ The table below lists the settings that most change how smooth and how accurate 
 
 #### Frames per view: 1 to 50
 
-To see how many frames each view needs, I took the orange block's full scan (49 views, 50 frames each, 2026-11-02) and rebuilt it with each view's depth as the median of its first 1, 5, 10 or all 50 frames (`tools/compare.py --vary frames=1,5,10,50`). The views and poses are identical; only the frame count changes.
+To see how many frames each view needs, I took the orange block's full scan (49 views, 50 frames each, 2026-11-02) and rebuilt it with each view's depth as the median of its first 1, 5, 10 or all 50 frames (`analysis/compare.py --vary frames=1,5,10,50`). The views and poses are identical; only the frame count changes.
 
 | Frames per view | Views disagree (median) | Roughness | Width, length error | Height error | Capture per view |
 |---|---|---|---|---|---|
@@ -880,17 +903,17 @@ For now, 5 frames stays the default, and `--full-scan` is for collecting dataset
 
 | Method | Final-mesh roughness (block / cylinder / bowl) | Block width, length / height | Cylinder diameter / height | Bowl: CAD median / bias / height |
 |---|---|---|---|---|
-| none | 0.092 / 0.095 / 0.229mm | +4.40, +4.72 / +1.08mm | +4.74 / +1.22mm | 1.10 / +0.43 / +1.38mm |
-| taubin | 0.088 / 0.092 / 0.219mm | +4.36, +4.72 / +1.14mm | +4.40 / +1.23mm | 1.11 / +0.45 / +1.64mm |
-| laplacian | 0.071 / 0.082 / 0.174mm | +4.25, +4.65 / +0.99mm | +4.55 / +1.11mm | 1.07 / +0.40 / +1.04mm |
-| simple | 0.067 / 0.076 / 0.140mm | +4.20, +4.61 / +0.94mm | +4.59 / +1.13mm | 1.06 / +0.35 / +0.93mm |
-| **hc_laplacian** | **0.064 / 0.076 / 0.140mm** | **+4.18, +4.61 / +0.95mm** | **+4.27 / +1.07mm** | 1.07 / +0.39 / **+0.89mm** |
-| cotangent_laplacian | 0.074 / 0.079 / 0.166mm | +4.28, +4.63 / +0.96mm | +4.62 / +1.15mm | 1.06 / +0.40 / +0.92mm |
-| two_step | 0.069 / 0.083 / 0.128mm | +4.89, +5.07 / +2.16mm | +4.30 / +2.35mm | 1.07 / +0.40 / +4.31mm |
+| none | 0.092 / 0.095 / 0.064mm | +4.40, +4.72 / +1.08mm | +4.74 / +1.22mm | 0.74 / +0.70 / −0.19mm |
+| taubin | 0.088 / 0.092 / 0.064mm | +4.36, +4.72 / +1.14mm | +4.40 / +1.23mm | 0.74 / +0.70 / −0.10mm |
+| laplacian | 0.071 / 0.082 / 0.051mm | +4.25, +4.65 / +0.99mm | +4.55 / +1.11mm | 0.73 / +0.70 / −0.42mm |
+| simple | 0.067 / 0.076 / 0.041mm | +4.20, +4.61 / +0.94mm | +4.59 / +1.13mm | 0.73 / +0.70 / −0.36mm |
+| **hc_laplacian** | **0.064 / 0.076 / 0.040mm** | **+4.18, +4.61 / +0.95mm** | **+4.27 / +1.07mm** | 0.73 / +0.70 / −0.44mm |
+| cotangent_laplacian | 0.074 / 0.079 / 0.049mm | +4.28, +4.63 / +0.96mm | +4.62 / +1.15mm | 0.73 / +0.70 / −0.34mm |
+| two_step | 0.069 / 0.083 / 0.049mm | +4.89, +5.07 / +2.16mm | +4.30 / +2.35mm | 0.73 / +0.69 / +0.48mm |
 
-- **The smoothest (least rough) final mesh: HC Laplacian**, 30-39% less rough than no smoothing (tied with the simple average on the cylinder and the bowl).
-- **The most accurate: HC Laplacian against the calipers** (the block's and cylinder's sizes and every height), and **the simple average against the bowl's CAD model**, by 0.01mm in median error, which is within rebuild noise.
-- **Taubin, the method used before, barely smooths** at 5 steps. **Two-step makes every object 1-3mm taller** (it sharpens and lifts the top edges: an added feature), so it's out. Rebuilding with identical settings varies by about ±0.15mm, so size differences under about 0.3mm aren't meaningful.
+- **The smoothest (least rough) final mesh: HC Laplacian**, 20-38% less rough than no smoothing (tied with the simple average on the cylinder and the bowl).
+- **The most accurate: HC Laplacian against the calipers** (the block's and cylinder's sizes and heights). Against the bowl's CAD model, every method is within 0.01mm of the others, which is within rebuild noise; smoothing lowers the bowl's height by up to 0.25mm.
+- **Taubin, the method used before, barely smooths** at 5 steps. **Two-step makes every object 0.7-1.1mm taller** (it sharpens and lifts the top edges: an added feature), so it's out. Rebuilding with identical settings varies by about ±0.15mm, so size differences under about 0.3mm aren't meaningful.
 
 #### TSDF truncation band and voxel size
 
@@ -898,15 +921,15 @@ For now, 5 frames stays the default, and `--full-scan` is for collecting dataset
 
 | Band | Orange block (width, length / height) | Green cylinder (diameter / height) | Bowl: CAD median / bias, measured share | Cup / mug: final-mesh roughness |
 |---|---|---|---|---|
-| 2mm | +4.0, +4.2 / +0.4mm | +3.8 / +0.7mm | 0.96 / −0.62mm, 70% | 0.348 / 0.243mm |
-| 3mm | +4.3, +4.5 / +0.5mm | +4.3 / +0.8mm | 1.09 / −0.76mm, 82% | 0.142 / 0.168mm |
-| 4.5mm | +4.1, +4.6 / +0.8mm | +4.4 / +1.0mm | **0.98 / −0.22mm**, 87% | 0.086 / 0.103mm |
-| **6mm** (default) | +4.2, +4.6 / +0.9mm | +4.3 / +1.1mm | 1.03 / +0.34mm, 89% | 0.074 / 0.083mm |
-| 9mm | +4.2, +4.7 / +1.1mm | +4.7 / +1.3mm | 1.71 / +1.24mm, 85% | 0.083 / 0.084mm |
+| 2mm | +4.0, +4.2 / +0.4mm | +3.8 / +0.7mm | 0.38 / +0.10mm, 79% | 0.348 / 0.243mm |
+| 3mm | +4.3, +4.5 / +0.5mm | +4.3 / +0.8mm | 0.46 / +0.26mm, 82% | 0.142 / 0.168mm |
+| 4.5mm | +4.1, +4.6 / +0.8mm | +4.4 / +1.0mm | 0.49 / +0.40mm, 88% | 0.086 / 0.103mm |
+| **6mm** (default) | +4.2, +4.6 / +0.9mm | +4.3 / +1.1mm | 0.71 / +0.67mm, 91% | 0.074 / 0.083mm |
+| 9mm | +4.2, +4.7 / +1.1mm | +4.7 / +1.3mm | 1.69 / +1.66mm, 90% | 0.083 / 0.084mm |
 
 - **On the solid objects, a narrower band mainly improves the height** (by up to 0.6mm), and the cylinder's diameter by 0.5mm at 2mm; the block's width hardly changes.
-- **On the thin-walled bowl, the band decides whether the wall survives:** at 2-3mm it falls apart (the views disagree by 2-3.6mm and the wall shrinks inward), at 9mm it thickens (+1.24mm bias), and **4.5mm is the most accurate** (bias −0.22mm). The cup's and mug's volumes change two- to three-fold with the band, so it shapes thin walls strongly.
-- **Voxel size:** on the block and cylinder, 2.0mm voxels come out slightly smoother and more accurate than 1.5mm, and 1.0mm worse. On the bowl, only 1.5mm works: at 1.0mm only 25% of the surface was measured and the closing ballooned, and at 2.0mm the closing failed.
+- **On the thin-walled bowl, the measured surface gets more accurate as the band narrows:** at 2mm, the median CAD error is about half the default's, and the diameter error falls from +4.7mm to +1.5mm. The trade: less of the bowl is measured (79% instead of 91%), and at 2-3mm the closing adds straight walls under the bowl ([§5.7](#57-fusing-the-views-tsdf)); 4.5mm keeps most of the gain without them. The cup's and mug's volumes change two- to three-fold with the band, so it shapes thin walls strongly.
+- **Voxel size:** on the block and cylinder, 2.0mm voxels come out slightly smoother and more accurate than 1.5mm, and 1.0mm worse. On the bowl, all three close: 2.0mm is the smoothest and as accurate against the CAD model as 1.5mm, but loses 0.6mm of height and some measured surface (87% instead of 91%), and 1.0mm is slightly less accurate.
 
 #### Evaluating Tuning Parameters
 
@@ -961,15 +984,15 @@ Several of these full scans are available through this repo for you to experimen
 
 | Dataset | Object | Views × frames per view | Ground truth | Download |
 |---|---|---|---|---|
-| `20261102-141308-orange-block` | Orange block | 49 × 50 | Calipers: many readings and their averages, in `ground_truth.toml` | [zip, 546MB](https://github.com/cameron-lerch/ViamObjectReconstruction/releases/download/datasets-v1/20261102-141308-orange-block.zip) |
-| `20261103-091105-green-cylinder` | Green cylinder | 50 × 50 | Calipers: many readings and their averages, in `ground_truth.toml` | [zip, 548MB](https://github.com/cameron-lerch/ViamObjectReconstruction/releases/download/datasets-v1/20261103-091105-green-cylinder.zip) |
+| `20261102-141308-orange-block-280mm` | Orange block | 49 × 50 | Calipers: many readings and their averages, in `ground_truth.toml` | [zip, 625MB](https://github.com/cameron-lerch/ViamObjectReconstruction/releases/download/datasets-v1/20261102-141308-orange-block-280mm.zip) |
+| `20261103-091105-green-cylinder-280mm` | Green cylinder | 50 × 50 | Calipers: many readings and their averages, in `ground_truth.toml` | [zip, 619MB](https://github.com/cameron-lerch/ViamObjectReconstruction/releases/download/datasets-v1/20261103-091105-green-cylinder-280mm.zip) |
 
 Each dataset is a complete session folder: the survey, the head-on view of the calibration board, and every scan view, each with its color image, its median depth image (16-bit millimeters), the camera's pose and the arm's joints when it was captured, and its 50 raw color and depth frames. The meshes the scan built are included too. To use one, unzip it into `data/` and run any offline command on it:
 
 ```bash
-python data_viewer.py 20261102-141308-orange-block                                       # replay the scan in the viewer
-python scan.py reconstruct --session data/20261102-141308-orange-block                  # rebuild the meshes
-python tools/compare.py data/20261102-141308-orange-block --vary frames=1,5,50          # or any setting, as in §6.3
+python data_viewer.py 20261102-141308-orange-block-280mm                                    # replay the scan in the viewer
+python scan.py reconstruct --session data/20261102-141308-orange-block-280mm               # rebuild the meshes
+python analysis/compare.py data/20261102-141308-orange-block-280mm --vary frames=1,5,50    # or any setting, as in §6.3
 ```
 
 I'd welcome feedback from anyone who finds a way to improve these meshes, whether through the way the views are captured, fused, smoothed or closed. Please open an issue on GitHub with what you tried and how it changed the results.
@@ -1068,7 +1091,7 @@ The [Quick Start](#quick-start) covers the shortest path. This section has every
 ### 9.1 Prerequisites
 
 - Python 3.14 with the packages in [`requirements.txt`](requirements.txt) (Viam SDK, Open3D 0.20, PyMeshLab, NumPy, SciPy). `cairosvg` is optional, for PNG copies of figures.
-- The hardware used here: a **UFactory 850** arm, and an **Intel RealSense D435i** depth camera on its wrist, at 1280 × 720. Intel specifies the D435i's depth accuracy as under 2% at 2m, its ideal range as 0.3-3m, and its minimum depth as about 28cm at this resolution ([Intel's specifications](https://www.intel.com/content/www/us/en/products/sku/190004/intel-realsense-depth-camera-d435i/specifications.html)). Against the calibration board, flat-surface depth measured within about 0.5mm at 0.26-0.5m ([§5.5](#55-camera-calibration)).
+- The hardware used here: a **UFactory 850** arm, and an **Intel RealSense D435** depth camera on its wrist, at 1280 × 720. Intel specifies the D435's depth accuracy as under 2% at 2m, its ideal range as 0.3-3m, and its minimum depth as about 28cm at this resolution ([Intel's specifications](https://www.intel.com/content/www/us/en/products/sku/190004/intel-realsense-depth-camera-d435i/specifications.html)). Against the calibration board, flat-surface depth measured within about 0.5mm at 0.26-0.5m ([§5.5](#55-camera-calibration)).
 - A Viam machine with an arm, a depth camera whose frame is attached to the arm, the builtin motion service, and the work area's static obstacles (table, walls) as geometry in the frame system.
 
 ### 9.2 Machine Configuration
@@ -1080,9 +1103,9 @@ The [Quick Start](#quick-start) covers the shortest path. This section has every
 | `[machine] address` | `<machine>.viam.cloud` | resources `arm`, `cam` and `builtin` (and `gripper`, when one is mounted) |
 | `[workspace] x_range, y_range` | −350..700, −650..350mm | clear of the walls (front x=800, side y=425) |
 | `[workspace] survey_height, survey_spacing` | 600mm, 340mm | overhead grid over the search region |
-| `[workspace] min_base_distance` | 350mm | the arm's base and the cables around it are ignored (default 200mm); an object centered past it keeps its points up to 100mm closer |
+| `[workspace] min_base_distance` | 100mm | the arm's base is ignored (default 200mm); objects can sit close to the arm, and any cables the survey finds can be skipped when asked |
 | `[machine] camera_mount_file` | `calibration/<rig>_camera_mount.json` | the calibrated camera mount; the app's camera frame is display-only |
-| `[views] standoff` | 320mm | keeps the nearest surface beyond the D435i's 0.3m minimum |
+| `[views] standoff` | 320mm | keeps the nearest surface beyond the D435's 0.3m minimum |
 | `[views] min_camera_height` | 60mm | views that would bring the camera lower above the table are skipped |
 | `[capture]` | settle 0.6s, 5 frames | |
 
@@ -1150,13 +1173,10 @@ Every command, whether it moves the arm, and what it does:
 | `scan.py compare [--objects N] [--truth NAME]` | no | Measure each mesh like calipers and compare with the `ground_truth.toml` entry it resembles (by shape and size; skipped if none), or with `--truth NAME` |
 | `scan.py touch-off [--execute]` | with `--execute` | Touch bare table with the closed gripper (paper test) to measure the real fingertip reach (off while no gripper is mounted) |
 | `scan.py demo [--progression]` | no | Everything on synthetic data, scored against the truth |
-| `tools/camera_height_check.py [--height 100] [--execute]` | with `--execute` | A ruler check of the camera mount: the lens straight above the calibration board at a known height, with the predicted heights of the camera's face and of its collision box |
-| `tools/compare.py data/<session> [more sessions] --vary KEY=V1,V2 [--object N] [--truth NAME]` | no | Rebuild saved scans several ways (frames per view, mount, views, any setting) or compare rigs; a table and a figure ([§6.3](#63-comparing-settings-methods-and-cameras)) |
-| `tools/compare_calibration.py [data/board-...]` | no | My hand-eye solver against Viam's (and OpenCV's other methods) on saved board runs; saves each method's mount |
-| `tools/survey_map.py data/<session>` | no | Draw the numbered map of the table for a session surveyed before maps existed |
+| `analysis/camera_height_check.py [--height 100] [--execute]` | with `--execute` | A ruler check of the camera mount: the lens straight above the calibration board at a known height, with the predicted heights of the camera's face and of its collision box |
+| `analysis/compare.py data/<session> [more sessions] --vary KEY=V1,V2 [--object N] [--truth NAME]` | no | Rebuild saved scans several ways (frames per view, mount, views, any setting) or compare rigs; a table and a figure ([§6.3](#63-comparing-settings-methods-and-cameras)) |
+| `analysis/compare_calibration.py [data/board-...]` | no | My hand-eye solver against Viam's (and OpenCV's other methods) on saved board runs; saves each method's mount |
 | `data_viewer.py [<session>] [--object N] [--seconds 3]` | no | Watch a saved scan in the viewer, as it looked while it ran, with playback and the final mesh (default: the most recent scan) |
-| `tools/depth_previews.py data/<session>` | no | Add colored `depth_preview.jpg` files to a session saved before they existed |
-| `tools/make_figures.py`, `tools/make_tsdf_diagram.py`, `tools/make_ring_diagram.py` | no | Regenerate this README's figures, the fusion diagram and the ring diagram |
 
 ### 9.5 Watching a scan live
 
@@ -1222,7 +1242,7 @@ recon/
   rgbd.py, transforms.py depth decoding and filtering, view files, depth previews, pose math (Viam conventions)
   live.py                the live viewer: preview fusion, pause/stop, its local web server
   survey_map.py          the numbered map of the table after a survey
-  experiment.py          rebuild saved scans in variants and measure them (tools/compare.py)
+  experiment.py          rebuild saved scans in variants and measure them (analysis/compare.py)
   cad.py                 fit a printed object's CAD model to a scan; signed surface error
   handeye.py             hand-eye methods compared on board runs (ours, and Viam's solver)
   session.py             data/<session>/ layout
@@ -1230,20 +1250,12 @@ recon/
 web/
   live.html              the viewer's page (three.js)
   viam_logo.svg          the Viam logo, shown in panels with nothing to show yet
-tools/
+analysis/                the scripts behind this README's studies
   compare.py             compare variants of saved scans, or rigs (a table and a figure)
   compare_calibration.py compare hand-eye calibration methods on saved board runs
   viam_solve_batch.py    runs Viam's own hand-eye solver (needs .venv-opencv4, see recon/handeye.py)
-  survey_map.py          draw the numbered map for an older session
-  depth_previews.py      colored depth previews for older sessions
-  render_mesh.py         render meshes to a PNG from the command line
-  make_figures.py        this README's result figures
-  make_noise_figure.py   one view at a time: color image and raw points per view
-  make_object_gallery.py the scanned-objects gallery: final meshes, point clouds and their numbers
-  package_dataset.py     zip a full scan for publishing (machine address removed)
-  make_tsdf_diagram.py   the fusion diagram
-  make_ring_diagram.py   the open-table ring diagram
-tests/                   103 tests, mostly against synthetic ground truth
+  camera_height_check.py a ruler check of the camera mount above the calibration board
+tests/                   105 tests, mostly against synthetic ground truth
 media/                   diagrams (SVG + PNG) and figures
 ```
 
@@ -1368,7 +1380,7 @@ Next, I'd like to scan the same objects with an Orbbec Astra 2, which is expecte
 - **per view:** the depth error against the ChArUco board, noise on flat table, the share of pixels with no reading, flying pixels at edges, and noise across the frames taken at one pose;
 - **fused:** the error against the calipers (how much too wide), wall roughness, volume, and how many views each camera needs to measure the whole object.
 
-**Getting started on the Orbbec arm:** fill in [`config_orbbec.toml`](config_orbbec.toml) (every line marked `SET`: the address, credentials file, component and image-source names, workspace, and a ready pose for that arm), then run `python calibration.py --config config_orbbec.toml --plan-only`, then the same with the arm moving, and then `python scan.py --config config_orbbec.toml`. Capture accepts depth in Viam's format or as a 16-bit PNG. To compare, run `python tools/compare.py data/<realsense scan> data/<orbbec scan>`.
+**Getting started on the Orbbec arm:** fill in [`config_orbbec.toml`](config_orbbec.toml) (every line marked `SET`: the address, credentials file, component and image-source names, workspace, and a ready pose for that arm), then run `python calibration.py --config config_orbbec.toml --plan-only`, then the same with the arm moving, and then `python scan.py --config config_orbbec.toml`. Capture accepts depth in Viam's format or as a 16-bit PNG. To compare, run `python analysis/compare.py data/<realsense scan> data/<orbbec scan>`.
 
 ### 13.8 Moving objects the arm can't scan all the way around
 
@@ -1409,6 +1421,28 @@ A first version of this is in the code (`recon/relocate.py`), turned off (`[relo
 - **The Python SDK's connection check** uses a fixed 1s timeout, which closes healthy connections during large transfers. It should be configurable, or skipped while a call is streaming.
 - **`get_point_cloud()` over a cloud connection** dropped the connection at 1280×720. Documenting a size limit, or adding a decimation option, would help.
 - **Once, the frame system reported a pose 180° off the arm's joints.** I couldn't reproduce it, but a built-in consistency check (frame system vs. controller) would be valuable on shared arms.
+
+### Keeping the Camera Cable from Winding Up
+
+The camera's cable runs along the arm to its wrist, so every turn of the last joint winds it a little further. Viam's motion planner doesn't know about the cable: the last joint's own limits allow almost two full turns, and any of several joint solutions that reach a pose is fair game. This is how the scanner keeps the wrist in check when it plans each object's views:
+
+<p align="center">
+  <img src="media/diagrams/cable_rolls.png" alt="Flowchart: for each candidate view, each of 4 camera rolls gets a plan-only request to Viam's motion service; a roll is kept if a plan is found and the last joint ends within ±200° of its zero, otherwise rejected with its reason. If any roll is kept, the one closest to the previous view's joints is chosen; if none, the view is skipped as unreachable. A note says that during the scan Viam plans each move again, so the wrist can end a full turn from its plan, and nothing checks its angle after the move." width="1000">
+  <br><sub><b>DIAGRAM.</b> How each view's camera roll is chosen during planning</sub>
+</p>
+
+1. **Four rolls per view.** Turning the camera about the direction it looks barely changes the picture, so each view is planned at four rolls (`views.rolls_deg`). That gives four different ways to reach almost the same view, often with the wrist in quite different positions.
+2. **A plan-only request for each roll.** Viam's motion service returns the joint trajectory it would use, without moving the arm, or the reason it can't reach that pose.
+3. **The wrist limit.** A roll is rejected if the plan would leave the last joint more than 200° from its zero (`views.max_wrist_deg`). The limit is on the joint's angle itself, not on how far it has turned since the scan began, and it's checked at the end of each plan, not along the way.
+4. **The smallest change.** Of the rolls that are left, the scanner keeps the one whose end joints are closest to the previous view's, so the wrist doesn't wind steadily in one direction around a ring. The views are planned in travel order (top first, then ring by ring, changing direction each ring), which helps too.
+5. **No plan without a wrist turn.** A rejected roll isn't re-planned with the wrist held still; the other rolls are the alternatives. If none of the four works, the view is dropped.
+
+**Where this falls short.** This all happens in planning, before the scan. During the scan, each view is reached with an ordinary `motion.move` to the chosen pose, and Viam plans that move again from wherever the arm is. A pose fixes the last joint's angle only up to a full turn, so the move could, in principle, reach the right pose with the wrist a turn away from the planned one. After each move, the scanner checks that the camera reached its pose, but it doesn't check the wrist's angle again.
+
+**What would help from Viam:**
+
+- **Joint limits for one request:** a way to give a plan or move request tighter joint limits than the arm's own (say, ±200° on the last joint), so that the planner respects the cable directly.
+- **Joint-space goals with collision checking:** a way to move to the joint angles that a plan-only request returned, with the same collision checks, so the arm ends up exactly where it was planned to.
 
 ---
 
@@ -1560,13 +1594,13 @@ Re-run on 2026-11-03 with HC Laplacian on every mesh (`...-hc-trunc-*`, `...-hc-
 
 | Band (1.5mm voxels) | Orange block, full scan (width, length / height) | Green cylinder, full scan (diameter / height) | Bowl, full scan: CAD median / bias, measured share | Cup / mug: final-mesh roughness |
 |---|---|---|---|---|
-| 2mm | +4.0, +4.2 / +0.4mm | +3.8 / +0.7mm | 0.96 / −0.62mm, 70% | 0.348 / 0.243mm |
-| 3mm | +4.3, +4.5 / +0.5mm | +4.3 / +0.8mm | 1.09 / −0.76mm, 82% | 0.142 / 0.168mm |
-| 4.5mm | +4.1, +4.6 / +0.8mm | +4.4 / +1.0mm | 0.98 / −0.22mm, 87% | 0.086 / 0.103mm |
-| 6mm (default) | +4.2, +4.6 / +0.9mm | +4.3 / +1.1mm | 1.03 / +0.34mm, 89% | 0.074 / 0.083mm |
-| 9mm | +4.2, +4.7 / +1.1mm | +4.7 / +1.3mm | 1.71 / +1.24mm, 85% | 0.083 / 0.084mm |
+| 2mm | +4.0, +4.2 / +0.4mm | +3.8 / +0.7mm | 0.38 / +0.10mm, 79% | 0.348 / 0.243mm |
+| 3mm | +4.3, +4.5 / +0.5mm | +4.3 / +0.8mm | 0.46 / +0.26mm, 82% | 0.142 / 0.168mm |
+| 4.5mm | +4.1, +4.6 / +0.8mm | +4.4 / +1.0mm | 0.49 / +0.40mm, 88% | 0.086 / 0.103mm |
+| 6mm (default) | +4.2, +4.6 / +0.9mm | +4.3 / +1.1mm | 0.71 / +0.67mm, 91% | 0.074 / 0.083mm |
+| 9mm | +4.2, +4.7 / +1.1mm | +4.7 / +1.3mm | 1.69 / +1.66mm, 90% | 0.083 / 0.084mm |
 
-On the full scans, a narrower band mainly improves the height of the solid objects (up to 0.6mm). On the thin-walled bowl, 2-3mm breaks the wall apart (the views disagree by 2-3.6mm and it shrinks inward), 9mm thickens it, and 4.5mm is the most accurate (bias −0.22mm). The cup's and mug's volumes change two- to three-fold with the band, so it strongly shapes thin walls. Voxel size (6mm band): 2.0mm voxels are slightly smoother and more accurate than 1.5mm on the block and cylinder, and 1.0mm worse; on the bowl only 1.5mm works (1.0mm: 25% measured and the closing balloons; 2.0mm: the closing fails). These scans are from the 280mm standoff; confirm on the 320mm re-scans before changing the defaults (4.5mm looks like a good compromise).
+On the full scans, a narrower band mainly improves the height of the solid objects (up to 0.6mm). On the thin-walled bowl, the measured surface is most accurate at 2mm (median CAD error 0.38mm vs. 0.71mm at 6mm), but at 2-3mm less of it is measured and the closing adds straight walls under it; 9mm thickens it. The cup's and mug's volumes change two- to three-fold with the band, so it strongly shapes thin walls. Voxel size (6mm band): 2.0mm voxels are slightly smoother and more accurate than 1.5mm on the block and cylinder, and 1.0mm worse; on the bowl all three close (2.0mm: smoothest, 0.6mm less height; 1.0mm: slightly less accurate). These scans are from the 280mm standoff; confirm on the 320mm re-scans before changing the defaults (4.5mm looks like a good compromise).
 
 **4. Smoothing the measured surface with Laplacian instead of Taubin makes it much smoother without changing the size** (E4; `...-E4-mesh-*`): measured-surface roughness 0.12 → 0.09mm (block), 0.13 → 0.09mm (cylinder), 0.25 → 0.18mm (printed block), with size errors within 0.1mm. The final, closed mesh isn't smoothed at all (only the measured surface is), so it wasn't affected. The closing method (flat bottom vs. plain Poisson) changed nothing measurable on these objects.
 
@@ -1588,13 +1622,13 @@ On the full scans, a narrower band mainly improves the height of the solid objec
 
 | Method | Final-mesh roughness (block / cylinder / bowl) | Block width, length / height | Cylinder diameter / height | Bowl: CAD median / bias / height |
 |---|---|---|---|---|
-| none | 0.092 / 0.095 / 0.229mm | +4.40, +4.72 / +1.08mm | +4.74 / +1.22mm | 1.10 / +0.43 / +1.38mm |
-| taubin | 0.088 / 0.092 / 0.219mm | +4.36, +4.72 / +1.14mm | +4.40 / +1.23mm | 1.11 / +0.45 / +1.64mm |
-| laplacian | 0.071 / 0.082 / 0.174mm | +4.25, +4.65 / +0.99mm | +4.55 / +1.11mm | 1.07 / +0.40 / +1.04mm |
-| simple | 0.067 / 0.076 / 0.140mm | +4.20, +4.61 / +0.94mm | +4.59 / +1.13mm | 1.06 / +0.35 / +0.93mm |
-| hc_laplacian | 0.064 / 0.076 / 0.140mm | +4.18, +4.61 / +0.95mm | +4.27 / +1.07mm | 1.07 / +0.39 / +0.89mm |
-| cotangent_laplacian | 0.074 / 0.079 / 0.166mm | +4.28, +4.63 / +0.96mm | +4.62 / +1.15mm | 1.06 / +0.40 / +0.92mm |
-| two_step | 0.069 / 0.083 / 0.128mm | +4.89, +5.07 / +2.16mm | +4.30 / +2.35mm | 1.07 / +0.40 / +4.31mm |
-| scale_dependent | 0.086 / 0.093 / broke the mesh | +4.35, +4.70 / +1.07mm | +4.61 / +1.18mm | – |
+| none | 0.092 / 0.095 / 0.064mm | +4.40, +4.72 / +1.08mm | +4.74 / +1.22mm | 0.74 / +0.70 / −0.19mm |
+| taubin | 0.088 / 0.092 / 0.064mm | +4.36, +4.72 / +1.14mm | +4.40 / +1.23mm | 0.74 / +0.70 / −0.10mm |
+| laplacian | 0.071 / 0.082 / 0.051mm | +4.25, +4.65 / +0.99mm | +4.55 / +1.11mm | 0.73 / +0.70 / −0.42mm |
+| simple | 0.067 / 0.076 / 0.041mm | +4.20, +4.61 / +0.94mm | +4.59 / +1.13mm | 0.73 / +0.70 / −0.36mm |
+| hc_laplacian | 0.064 / 0.076 / 0.040mm | +4.18, +4.61 / +0.95mm | +4.27 / +1.07mm | 0.73 / +0.70 / −0.44mm |
+| cotangent_laplacian | 0.074 / 0.079 / 0.049mm | +4.28, +4.63 / +0.96mm | +4.62 / +1.15mm | 0.73 / +0.70 / −0.34mm |
+| two_step | 0.069 / 0.083 / 0.049mm | +4.89, +5.07 / +2.16mm | +4.30 / +2.35mm | 0.73 / +0.69 / +0.48mm |
+| scale_dependent | 0.086 / 0.093 / not tested | +4.35, +4.70 / +1.07mm | +4.61 / +1.18mm | – |
 
-HC Laplacian and `simple` smooth the final mesh the most (30-39% less rough) and slightly improve accuracy, without adding anything (the bowl's CAD error and bias both go down slightly). Taubin, the method used so far, barely smooths at 5 steps. `two_step` makes every object 1-3mm taller (an added feature), and `scale_dependent` destroyed the bowl's mesh. Size differences under about 0.3mm are within rebuild noise.
+HC Laplacian and `simple` smooth the final mesh the most (20-38% less rough) and slightly improve accuracy against the calipers, without adding anything (against the bowl's CAD model, every method is within 0.01mm). Taubin, the method used so far, barely smooths at 5 steps. `two_step` makes every object 0.7-1.1mm taller (an added feature). Size differences under about 0.3mm are within rebuild noise.

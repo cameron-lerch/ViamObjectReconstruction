@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import replace
 
 from pathlib import Path
 
@@ -345,6 +346,33 @@ def captured_views(session: Session, object_id: int) -> list[tuple[int, Path, di
     return views
 
 
+def saved_layout(session: Session, object_id: int, config: Config) -> tuple[Config, dict[float, float]]:
+    ''' The ring layout an object's scan started with, so that a resume plans the same views:
+    base_in_gap from the session's config (sessions from before it saved none: off), and
+    the rings the planner turned to get around the arm's base (plan.json). '''
+    saved = session.read().get("config", {}).get("views", {})
+    config = replace(config, views=replace(config.views, base_in_gap=saved.get("base_in_gap", False)))
+    path = session.object_dir(object_id) / "plan.json"
+    record = (json.loads(path.read_text()).get("in_place") or {}) if path.exists() else {}
+    return config, {float(elevation): turn for elevation, turn in record.get("ring_rotations_deg", {}).items()}
+
+
+def why_skipped(error: Exception) -> str:
+    ''' A move's failure in a few words, naming who refused it: Viam's motion planner (before
+    the arm moves) or the arm's own controller (while it moves). '''
+    message = str(error)
+    if "Self Collision" in message:
+        return "the arm's controller (xArm) predicted a self-collision and refused the move"
+    if "zero IK solutions" in message or "too far" in message:
+        return "unreachable according to Viam's motion planner (no joint angles reach it)"
+    if "violation between" in message:
+        between = message.split("violation between ", 1)[1].split(" geometries")[0]
+        return f"Viam's motion planner found a collision between {between}"
+    if isinstance(error, MissedTarget):
+        return str(error)
+    return message[:160]
+
+
 def view_key(azimuth_deg: float, elevation_deg: float) -> tuple[int, int]:
     ''' Which planned view this is: its angle around the object and its ring. '''
     return round(float(azimuth_deg)) % 360, round(float(elevation_deg))
@@ -398,7 +426,8 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
             raise RuntimeError(f"Object {obj.id}'s views so far used {sorted(frames)} frames per view, this run "
                                f"{config.capture.frames_per_view}; resume with the same options (--full-scan or not)")
         target = scanned_object(session, obj.id)
-        plan = await plan_scan(robot, target, others, config)
+        config, rotations = saved_layout(session, obj.id, config)
+        plan = await plan_scan(robot, target, others, config, rotations)
         job = station_plan = None
     else:
         plan, job, station_plan = await plan_object(robot, obj, others, config)
@@ -458,13 +487,14 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
         except RobotUnresponsive:  # the robot stopped answering: end the run (scan.py says how to resume)
             raise
         except Exception as error:  # the planner can still fail on a path it approved from elsewhere
-            log.warning("  view %d (%s) skipped: %s", index, view.candidate.describe(), error)
+            log.warning("  view %d/%d (%s) skipped: %s", len(done) + number + 1, len(done) + len(views),
+                        view.candidate.describe(), why_skipped(error))
             continue
         await capture_view(robot, session.views_dir(obj.id) / f"view_{index:03d}", {
             "azimuth_deg": view.candidate.azimuth_deg, "elevation_deg": view.candidate.elevation_deg,
             "roll_deg": view.roll_deg, "commanded_T_world_cam": view.T_world_cam.tolist()},
             keep_frames=config.capture.keep_frames)
-        log.info("  captured view %d/%d (%s)", len(done) + number + 1, len(done) + len(views), view.candidate.describe())
+        log.info("  view %d/%d (%s) captured", len(done) + number + 1, len(done) + len(views), view.candidate.describe())
         if robot.live:
             robot.live.view_captured(session.views_dir(obj.id) / f"view_{index:03d}", len(done) + number)
     if robot.live:

@@ -78,7 +78,7 @@ def viam_solve(problems: list[tuple[str, list[np.ndarray], list[BoardView]]]) ->
     with tempfile.NamedTemporaryFile("w", suffix=".json") as file:
         json.dump(batch, file)
         file.flush()
-        output = subprocess.run([str(OPENCV4_PYTHON), str(ROOT / "tools" / "viam_solve_batch.py"), str(VIAM_SOLVE), file.name],
+        output = subprocess.run([str(OPENCV4_PYTHON), str(ROOT / "analysis" / "viam_solve_batch.py"), str(VIAM_SOLVE), file.name],
                                 capture_output=True, text=True, check=True).stdout
     mounts = []
     for result in json.loads(output):

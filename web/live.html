@@ -510,6 +510,7 @@ function render(status) {
   $("summary").textContent = parts.join(" · ");
   const ended = ["stopped", "done", "complete"].includes(status.state) || status.read_only;
   $("controls").hidden = Boolean(status.replay);
+  document.title = status.replay ? "Scan Replay" : "Live Scan";
   $("pause").textContent = status.paused ? "Resume" : "Pause";
   $("pause").disabled = ended || status.stopping;
   $("stop").disabled = ended || status.stopping;

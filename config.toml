@@ -14,8 +14,9 @@ camera_mount_file = "calibration/armfarm14_camera_mount.json"
 touch_off_file = "calibration/armfarm14_touch_off.json"
 
 [workspace]
-# Cables rise from around the arm's base on this cell: ignore everything within 350mm of it.
-min_base_distance = 350
+# Ignore everything within 100mm of the arm's base (measured from its center); was 350mm, to skip the
+# cables around the base, but that hid objects placed closer in. Cables found now can be skipped when asked.
+min_base_distance = 100
 # Table region searched for objects, clear of the walls (front x=800, side y=425).
 x_range = [-350, 700]
 y_range = [-650, 350]
@@ -23,7 +24,7 @@ y_range = [-650, 350]
 # visiting every reachable point. To use fixed positions instead: survey_positions = [[x, y, z], ...]
 
 [views]
-standoff = 320               # camera to the nearest point of the object's bounding sphere (the D435i's ideal minimum is 0.3m; scans before 2026-11-03 used 280)
+standoff = 320               # camera to the nearest point of the object's bounding sphere (the D435's ideal minimum is 0.3m; scans before 2026-11-03 used 280)
 elevations_deg = [10, 15, 25, 50, 72]   # the 10deg ring asks first (confirm_below_deg)
 azimuth_step_deg = 30
 min_coverage = 0.85          # below this, the object is moved to a scan station

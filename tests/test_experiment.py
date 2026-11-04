@@ -1,4 +1,4 @@
-''' tools/compare.py: variants of a saved scan rebuilt and measured the same way. '''
+''' analysis/compare.py: variants of a saved scan rebuilt and measured the same way. '''
 
 import json
 import sys
@@ -15,7 +15,7 @@ from recon.scene import DetectedObject, TablePlane
 from recon.session import Session
 from recon.views import generate_candidates, order_for_travel
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "analysis"))
 import compare  # noqa: E402
 
 OBJ = DetectedObject(0, np.array([431.0, -168.0, 37.0]), np.array([52.0, 51.0, 92.0]), 0.0, 1000)

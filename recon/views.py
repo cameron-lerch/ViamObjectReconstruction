@@ -32,17 +32,24 @@ def view_distance(obj: DetectedObject, config: ViewConfig) -> float:
     return config.standoff + obj.radius
 
 
-def generate_candidates(obj: DetectedObject, config: ViewConfig) -> list[ViewCandidate]:
-    ''' Rings of views at each elevation, plus one straight down, all aimed at the object. '''
+def generate_candidates(obj: DetectedObject, config: ViewConfig,
+                        rotations: dict[float, float] | None = None) -> list[ViewCandidate]:
+    ''' Rings of views at each elevation, plus one straight down, all aimed at the object.
+    `rotations` turns a ring (by its elevation) further, in degrees. '''
+    rotations = rotations or {}
     target = aim_point(obj, config)
     distance = view_distance(obj, config)
     candidates = []
     if config.include_top_view:
         candidates.append(ViewCandidate(target + [0, 0, distance], target, 0.0, 90.0))
     count = max(3, round(360 / config.azimuth_step_deg))
+    # Turn every ring so the arm's base (the world origin), seen from the object, falls in the
+    # middle of a gap between two views. On the full scans, the view lined up with the base
+    # was usually unreachable while its neighbors 30deg away were reachable.
+    base_gap = math.degrees(math.atan2(-obj.center[1], -obj.center[0])) + 180 / count
     for ring, elevation in enumerate(sorted(config.elevations_deg, reverse=True)):
-        # Stagger alternate rings so neighboring rings see different seams.
-        offset = (ring % 2) * 180 / count
+        # Without base_in_gap: stagger alternate rings so neighboring rings see different seams.
+        offset = (base_gap if config.base_in_gap else (ring % 2) * 180 / count) + rotations.get(elevation, 0.0)
         for k in range(count):
             azimuth = (offset + 360 * k / count) % 360
             direction = _direction(azimuth, elevation)
@@ -93,13 +100,17 @@ def order_for_travel(candidates: list[ViewCandidate]) -> list[ViewCandidate]:
         rings.setdefault(candidate.elevation_deg, []).append(candidate)
     ordered: list[ViewCandidate] = []
     for index, elevation in enumerate(sorted(rings, reverse=True)):
-        ring = sorted(rings[elevation], key=lambda c: c.azimuth_deg)
-        if ordered and len(ring) > 1:
-            # Start the ring at the view closest to where the previous ring ended.
-            last = ordered[-1].eye
-            start = int(np.argmin([np.linalg.norm(c.eye - last) for c in ring]))
-            ring = ring[start:] + ring[:start]
-            if index % 2 == 0:
-                ring = ring[:1] + ring[1:][::-1]
-        ordered.extend(ring)
+        ordered.extend(order_ring(rings[elevation], ordered[-1].eye if ordered else None, index % 2 == 0))
     return ordered
+
+
+def order_ring(ring: list[ViewCandidate], last_eye: np.ndarray | None, reverse: bool) -> list[ViewCandidate]:
+    ''' One ring in travel order: starting at the view closest to where the previous ring
+    ended (`last_eye`), going around in one direction, or the other with `reverse`. '''
+    ring = sorted(ring, key=lambda c: c.azimuth_deg)
+    if last_eye is not None and len(ring) > 1:
+        start = int(np.argmin([np.linalg.norm(c.eye - last_eye) for c in ring]))
+        ring = ring[start:] + ring[:start]
+        if reverse:
+            ring = ring[:1] + ring[1:][::-1]
+    return ring

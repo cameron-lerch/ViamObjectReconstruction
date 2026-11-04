@@ -1,9 +1,9 @@
 ''' A ruler check of the camera mount: put the camera straight above the calibration
 board at a known height, then measure it.
 
-    python tools/camera_height_check.py               # plan only: where it would go
-    python tools/camera_height_check.py --execute     # move there (asks first)
-    python tools/camera_height_check.py --height 120 --execute
+    python analysis/camera_height_check.py               # plan only: where it would go
+    python analysis/camera_height_check.py --execute     # move there (asks first)
+    python analysis/camera_height_check.py --height 120 --execute
 
 Our mount says where the lens (the depth camera's optical center) is. Looking straight
 down, the lens should be `--height` above the board's surface, and the camera's front

@@ -58,7 +58,7 @@
   <text x="900" y="196" class="bold">Every view looks at the aim point</text>
   <text x="900" y="216" class="desc">from 320mm beyond the object's</text>
   <text x="900" y="235" class="desc">bounding sphere, so the nearest surface</text>
-  <text x="900" y="254" class="desc">stays beyond the D435i's 0.3m minimum</text>
+  <text x="900" y="254" class="desc">stays beyond the D435's 0.3m minimum</text>
   <text x="900" y="287" class="bold">Checked before moving</text>
   <text x="900" y="307" class="desc">each pose is planned without moving</text>
   <text x="900" y="326" class="desc">(Viam's motion service), against the</text>

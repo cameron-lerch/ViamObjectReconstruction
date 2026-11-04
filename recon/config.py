@@ -112,7 +112,7 @@ class CameraConfig:
 @dataclass
 class ViewConfig:
     # Distance from the camera to the nearest point of the object's bounding sphere.
-    # Intel specifies the D435i's ideal range as 0.3-3m (minimum depth about 280mm at
+    # Intel specifies the D435's ideal range as 0.3-3m (minimum depth about 280mm at
     # 1280x720). At 280mm, the full scans put real surfaces 276-300mm from the camera
     # (the green cylinder: all 50 views under 300mm, 17 under 280mm), so from 2026-11-03
     # it's 320mm; earlier scans used 280mm, and a comparison of the two is planned.
@@ -121,6 +121,11 @@ class ViewConfig:
     # added 2026-10-29 after the printed sphere and bowl scans.
     elevations_deg: list[float] = field(default_factory=lambda: [15.0, 25.0, 50.0, 72.0])
     azimuth_step_deg: float = 30.0
+    # Turn every ring so the arm's base falls in the middle of a gap between two views. Only the
+    # scans of 2026-11-04 used it (their resumes still do); off, each ring starts at world +x,
+    # alternate rings offset by half a step, and the planner turns a ring only when the arm's
+    # base blocks one of its views (planner.plan_scan).
+    base_in_gap: bool = False
     include_top_view: bool = True
     # Rolls about the optical axis to try; the one needing the least joint motion wins.
     rolls_deg: list[float] = field(default_factory=lambda: [0.0, 180.0, 90.0, -90.0])
@@ -219,7 +224,7 @@ class ReconstructConfig:
     # Measured on RealSense data: test again for another camera (such as the Orbbec Astra 2).
     edge_grow: int = 2
     # How a view's raw frames become one depth image when it is rebuilt from them
-    # (tools/compare.py with frames=k): median, mean, or trimmed (the mean after dropping
+    # (analysis/compare.py with frames=k): median, mean, or trimmed (the mean after dropping
     # readings far from the median), keeping pixels with a reading in at least
     # frame_min_valid of the frames. A capture always saves the median at 0.5. Being tested.
     frame_combine: str = "median"

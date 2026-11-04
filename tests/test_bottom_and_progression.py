@@ -101,7 +101,8 @@ def test_progression_improves_with_more_views(tmp_path):
     assert everything["completeness"] == pytest.approx(1.0, abs=0.02) and three["completeness"] < 0.7
     # The bottom (~11% of this cylinder's surface) is never seen, so ~89% is the ceiling.
     assert everything["measured_share"] > 0.8
-    assert everything["volume_cm3"] == pytest.approx(np.pi * 2.5**2 * 9.0, rel=0.03)
+    # Smoothing the final mesh (HC Laplacian) shrinks it slightly: 3.3% of the volume here.
+    assert everything["volume_cm3"] == pytest.approx(np.pi * 2.5**2 * 9.0, rel=0.05)
     for k in (1, 3, len(views)):
         assert (tmp_path / f"views_{k:02d}" / "mesh.obj").exists()
         assert (tmp_path / f"views_{k:02d}" / "observed.obj").exists()

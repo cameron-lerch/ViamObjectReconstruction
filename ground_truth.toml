@@ -141,6 +141,23 @@ cad = "calibration/printed_objects/calibration_sphere/calibration_sphere.stl"
 
 [printed_bowl]
 shape = "bowl"
-diameter = 130.0       # across the rim
-height = 65.0
+diameter = 129.75            # across the rim; a ruler (too wide for the calipers): 129.5-130 every time (CAD: 130.0)
+height = 64.99               # table to the top of the rim, around the rim (CAD: 65.0)
+rim_thickness = 5.00         # around the rim (CAD: 5.0)
+bottom_diameter = 31.82      # the foot it stands on (CAD: 32.0)
+inside_depth = 60.95         # the plane across the rim to the deepest point inside (CAD: 60.0)
 cad = "calibration/printed_objects/calibration_bowl/calibration_bowl.stl"
+# 2026-11-04: the less shiny reprint, scanned as 20261103-152101-bowl-280mm.
+
+[printed_bowl.spread]
+diameter = 0.25              # half the ruler's range
+height = 0.15
+rim_thickness = 0.13
+bottom_diameter = 0.08
+inside_depth = 0.30
+
+[printed_bowl.measured]
+height = [64.90, 65.10, 65.07, 64.62, 65.00, 64.90, 64.96, 65.08, 65.13, 65.09]
+rim_thickness = [4.92, 5.16, 5.04, 4.97, 5.12, 5.16, 4.83, 4.89, 5.09, 4.85]
+bottom_diameter = [31.8, 31.88, 31.87, 31.72, 31.87, 31.85, 31.74, 31.92, 31.82, 31.68]
+inside_depth = [60.54, 61.36, 61.14, 60.93, 60.70, 61.05]

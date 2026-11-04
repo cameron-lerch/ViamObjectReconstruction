@@ -1,5 +1,6 @@
 ''' Turn candidate viewpoints into a reachable scan plan for one object. '''
 
+import logging
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -7,7 +8,9 @@ import numpy as np
 from .config import Config
 from .robot import Robot
 from .scene import DetectedObject
-from .views import ViewCandidate, aim_point, coverage, generate_candidates, order_for_travel
+from .views import ViewCandidate, aim_point, coverage, generate_candidates, order_ring
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -24,6 +27,7 @@ class ScanPlan:
     views: list[PlannedView] = field(default_factory=list)
     unreachable: list[tuple[ViewCandidate, str]] = field(default_factory=list)
     coverage: float = 0.0
+    rotations: dict[float, float] = field(default_factory=dict)  # rings turned to get around the arm's base
 
     def summary(self) -> str:
         total = len(self.views) + len(self.unreachable)
@@ -38,32 +42,70 @@ class ScanPlan:
                        "T_world_cam": v.T_world_cam.tolist()} for v in self.views],
             "unreachable": [{"azimuth_deg": c.azimuth_deg, "elevation_deg": c.elevation_deg, "reason": reason}
                             for c, reason in self.unreachable],
+            "ring_rotations_deg": {str(elevation): turn for elevation, turn in self.rotations.items()},
         }
 
 
-async def plan_scan(robot: Robot, obj: DetectedObject, others: list[DetectedObject], config: Config) -> ScanPlan:
-    ''' Check every candidate view with the motion planner, in travel order.
+def blocked_by_base(reason: str) -> bool:
+    ''' A planner failure that names the arm's base (e.g. "collision: arm:link4 and arm:link_base"). '''
+    return reason.startswith("collision") and "base" in reason
+
+
+async def plan_scan(robot: Robot, obj: DetectedObject, others: list[DetectedObject], config: Config,
+                    rotations: dict[float, float] | None = None) -> ScanPlan:
+    ''' Check every candidate view with the motion planner, ring by ring in travel order.
 
     Each view uses the camera roll whose joints are closest to the previous
     view's, so the wrist does not wind up over a ring. The scanned object and
     all other detected objects are obstacles, so plans never put the gripper
     or camera through them.
+
+    When the arm's base blocks a view on a ring, the ring is planned again turned by half
+    a step, and kept turned if that reaches more of its views. Views that fail for other
+    reasons (out of reach, say) don't turn a ring. `rotations` (from a saved plan) replays
+    a layout instead, so a resumed scan plans the views it started with.
     '''
     world_state = robot.world_state([obj, *others], config.views.object_margin)
-    plan = ScanPlan(obj)
-    previous = None
-    for candidate in order_for_travel(generate_candidates(obj, config.views)):
+    plan = ScanPlan(obj, rotations=dict(rotations or {}))
+    half_step = 180 / max(3, round(360 / config.views.azimuth_step_deg))
+    candidates = generate_candidates(obj, config.views, plan.rotations)
+    previous, last_eye = None, None
+    for index, elevation in enumerate(sorted({c.elevation_deg for c in candidates}, reverse=True)):
+        ring = order_ring([c for c in candidates if c.elevation_deg == elevation], last_eye, index % 2 == 0)
+        views, missed, end = await _plan_ring(robot, ring, obj, world_state, previous, config)
+        if rotations is None and len(ring) > 1 and any(blocked_by_base(reason) for _, reason in missed):
+            turned = {**plan.rotations, elevation: half_step}
+            other = order_ring([c for c in generate_candidates(obj, config.views, turned) if c.elevation_deg == elevation],
+                               last_eye, index % 2 == 0)
+            other_views, other_missed, other_end = await _plan_ring(robot, other, obj, world_state, previous, config)
+            if len(other_views) > len(views):
+                log.info("  %.0f degree ring was rotated by %.0f degrees to avoid the arm's base and reach more views "
+                         "(%d of %d instead of %d)", elevation, half_step, len(other_views), len(other), len(views))
+                ring, views, missed, end = other, other_views, other_missed, other_end
+                plan.rotations[elevation] = half_step
+        plan.views.extend(views)
+        plan.unreachable.extend(missed)
+        previous, last_eye = end, ring[-1].eye
+    plan.coverage = coverage(aim_point(obj, config.views), [v.candidate.eye for v in plan.views], config.views)
+    return plan
+
+
+async def _plan_ring(robot: Robot, ring: list[ViewCandidate], obj: DetectedObject, world_state, previous,
+                     config: Config) -> tuple[list[PlannedView], list[tuple[ViewCandidate, str]], np.ndarray | None]:
+    ''' Plan one ring's views in order: (reachable views, unreachable views with reasons,
+    the last reachable view's end joints, or `previous` if none). '''
+    views, missed = [], []
+    for candidate in ring:
         if candidate.eye[2] - obj.bottom_z < config.views.min_camera_height:
-            plan.unreachable.append((candidate, f"camera would be under {config.views.min_camera_height:.0f}mm above the table"))
+            missed.append((candidate, f"camera would be under {config.views.min_camera_height:.0f}mm above the table"))
             continue
         roll, pose, result = await robot.plan_best_roll(config.machine.camera, candidate.pose, world_state, previous)
         if pose is None:
-            plan.unreachable.append((candidate, result))
+            missed.append((candidate, result))
             continue
-        plan.views.append(PlannedView(candidate, roll, pose, result))
+        views.append(PlannedView(candidate, roll, pose, result))
         previous = result
-    plan.coverage = coverage(aim_point(obj, config.views), [v.candidate.eye for v in plan.views], config.views)
-    return plan
+    return views, missed, previous
 
 
 def spread_views(views: list[PlannedView], count: int | None) -> list[PlannedView]:
