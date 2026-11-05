@@ -42,7 +42,7 @@ from recon.progression import table as progression_table
 from recon.reconstruct import object_mask, surface_distances
 from recon.rgbd import back_project, load_views, save_view
 from recon.live import Live
-from recon.robot import MoveDeclined, PoseMismatch, Robot, RobotUnresponsive, connect
+from recon.robot import MoveDeclined, PoseMismatch, Robot, RobotUnresponsive, ask_operator, connect
 from recon.scene import detect_objects, fit_table_plane
 from recon.session import Session
 from recon.touchoff import touch_off
@@ -105,6 +105,8 @@ async def _run_with(machine, config: Config, steps, confirm_moves: bool, confirm
         log.info("Stopped: %s. The arm is where it was before that move.", declined)
     except PoseMismatch as mismatch:
         log.error("STOPPED, no further motion. %s", mismatch)
+    except pipeline.NeedsTable as needs:
+        log.error("Can't start the survey: %s.", needs)
     except RobotUnresponsive as silent:
         log.error("STOPPED: %s. viam-server may have restarted, or the connection dropped.", silent)
         try:
@@ -133,18 +135,21 @@ async def run_robot(args, config: Config) -> None:
                      go_ready=args.execute)
 
 
-async def touch_off_step(robot: Robot, config: Config, execute: bool, session: Session | None = None) -> dict | None:
+async def touch_off_step(robot: Robot, config: Config, execute: bool, session: Session | None = None,
+                         fresh: bool = False) -> dict | None:
     ''' Touch-off on a survey's table (the latest survey unless `session` is given); saves the result. '''
     if not config.machine.gripper:
         log.info("Touch-off is off: no gripper is mounted ([machine] gripper = \"\" in config.toml).")
         return None
     session = session or Session.latest(config.resolve(config.data_dir), surveyed=True)
     objects, plane = session.load_scene()
+    pipeline.use_table_area(config, session.load_region())
     robot.set_scene(plane, session.load_clutter())
     board = session.read().get("board")
     log.info("Using the survey in %s", session.root)
     survey_points = pipeline.scene_points(sorted(session.survey_dir.glob("view_*")), config)
-    result = await touch_off(robot, objects, plane, config, execute, board["center"] if board else None, survey_points)
+    result = await touch_off(robot, objects, plane, config, execute, board["center"] if board else None, survey_points,
+                             fresh=fresh)
     if result:
         path = config.resolve(config.machine.touch_off_file or "calibration/touch_off.json")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,20 +169,32 @@ async def touch_off_step(robot: Robot, config: Config, execute: bool, session: S
     return result
 
 
-async def board_step(robot: Robot, config: Config, execute: bool, save_mount: bool) -> dict | None:
-    ''' Calibrate the camera with the ChArUco board (starting from where the last survey saw it, if any). '''
+async def board_step(robot: Robot, config: Config, execute: bool, save_mount: bool, fresh: bool = False) -> dict | None:
+    ''' Calibrate the camera with the ChArUco board, starting from where this arm last saw it
+    (its home position's record, or its latest survey); otherwise look for it from where
+    the camera is. Another rig's survey never counts: its world frame is a different cell's.
+    With `fresh` (calibration.py), nothing saved counts: it looks for the board from where the camera is. '''
     known = None
-    try:
-        board = Session.latest(config.resolve(config.data_dir)).read().get("board")
-        known = np.array(board["center"]) if board else None
-    except FileNotFoundError:
+    home = config.resolve(config.machine.home_file) if config.machine.home_file else None
+    if fresh:
         pass
+    elif home is not None and home.exists():
+        known = np.array(json.loads(home.read_text())["board_center_mm"])
+    else:
+        try:
+            latest = Session.latest(config.resolve(config.data_dir)).read()
+            if latest.get("board") and latest.get("config", {}).get("machine", {}).get("rig") == config.machine.rig:
+                known = np.array(latest["board"]["center"])
+        except FileNotFoundError:
+            pass
     session = Session.create(config.resolve(config.data_dir), "board-" + time.strftime("%Y%m%d-%H%M%S"))
     result = await pipeline.board_calibration(robot, session, config, execute, known_center=known)
     if result:
         report_board(result, session)
         if save_mount:
             path = pipeline.save_mount(config, np.array(result["board_mount"]), f"board calibration, {session.root.name}")
+            robot.use_camera_mount(np.array(result["board_mount"]))  # for the rest of this run too (the survey)
+            robot.ignore_saved_calibration = False  # the saved one is now this run's
             log.info("Saved as the camera mount for all moves and captures: %s", path)
     return result
 
@@ -201,6 +218,7 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
     if reuse:
         session = Session.latest(config.resolve(config.data_dir), surveyed=True)
         objects, plane = session.load_scene()
+        pipeline.use_table_area(config, session.load_region())
         robot.set_scene(plane, session.load_clutter())
         log.info("Using survey from %s", session.root)
     else:
@@ -245,7 +263,7 @@ def describe_for_person(obj) -> str:
 def ask_object(obj) -> str:
     ''' 'y' (scan it), 'n' (skip), 'a' (scan this and all the rest without asking) or 'q' (stop). '''
     while True:
-        answer = input(f"Scan {describe_for_person(obj)}? [Enter = yes, n = skip, a = all the rest, q = stop] ").strip().lower()
+        answer = ask_operator(f"Scan {describe_for_person(obj)}? [Enter = yes, n = skip, a = all the rest, q = stop] ").strip().lower()
         if answer in ("", "y", "yes"):
             return "y"
         if answer in ("n", "a", "q"):
@@ -258,6 +276,7 @@ def latest_survey(robot: Robot, config: Config):
     (a fresh look from a pose too close to the table finds nothing). '''
     session = Session.latest(config.resolve(config.data_dir), surveyed=True)
     objects, plane = session.load_scene()
+    pipeline.use_table_area(config, session.load_region())
     robot.set_scene(plane, session.load_clutter())
     log.info("Planning on the survey in %s (run calibration.py or scan.py to survey again)", session.root)
     for obj in objects:
@@ -276,6 +295,7 @@ async def scan_everything(robot: Robot, config: Config, execute: bool, max_views
     if resume:
         session = Session(Path(resume))
         objects, plane = session.load_scene()
+        pipeline.use_table_area(config, session.load_region())
         robot.set_scene(plane, session.load_clutter())
         log.info("Resuming %s (its survey; the objects must not have moved)", session.root)
     elif execute:
@@ -342,7 +362,7 @@ async def scan_everything(robot: Robot, config: Config, execute: bool, max_views
         # The viewer stays open, with the final mesh, until this last prompt is answered.
         views = sum(len(pipeline.captured_views(session, obj.id)) for obj in scanned)
         live.complete(f"{views} views, final mesh ready")
-        await asyncio.to_thread(input, f"\nScan completed {views} views with {config.capture.frames_per_view} frames per view. "
+        await asyncio.to_thread(ask_operator, f"\nScan completed {views} views with {config.capture.frames_per_view} frames per view. "
                                        f"\nData saved and final mesh generated in {session.root} "
                                        "\n Press ENTER to end the program and close the webapp.")
 
@@ -385,6 +405,7 @@ def run_reconstruct(args, config: Config) -> None:
     data_dir = config.resolve(config.data_dir)
     session = Session(args.session) if args.session else Session.latest(data_dir)
     objects, plane = session.load_scene()
+    pipeline.use_table_area(config, session.load_region())
     for obj in selected(objects, args.objects):
         if session.views_dir(obj.id).exists():
             pipeline.reconstruct_object(session, obj.id, plane, config, refine=False if args.no_refine else None)
@@ -427,6 +448,7 @@ def run_progression(args, config: Config) -> None:
     ''' Meshes and metrics from 1, 2, ... n views of each selected object. '''
     session = Session(args.session) if args.session else Session.latest(config.resolve(config.data_dir))
     objects, plane = session.load_scene()
+    pipeline.use_table_area(config, session.load_region())
     for obj in selected(objects, args.objects):
         if not session.views_dir(obj.id).exists():
             continue

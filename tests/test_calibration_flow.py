@@ -9,7 +9,8 @@ from recon.config import Config
 def run(monkeypatch, execute=True, touch_off=None, answer=False, board_fails=False, gripper="gripper"):
     calls = []
 
-    async def board_step(robot, config, execute, save_mount):
+    async def board_step(robot, config, execute, save_mount, fresh=False):
+        assert fresh and robot.fresh, "calibration must start fresh (no saved home, mat position or mount)"
         calls.append(("board", execute, save_mount))
         if board_fails:
             raise RuntimeError("The board isn't in view")
@@ -19,7 +20,8 @@ def run(monkeypatch, execute=True, touch_off=None, answer=False, board_fails=Fal
         calls.append(("survey", execute))
         return "the new survey", ["object"], None
 
-    async def touch_off_step(robot, config, execute, session):
+    async def touch_off_step(robot, config, execute, session, fresh=False):
+        assert fresh, "the touch-off must not start from an earlier one's reach"
         calls.append(("touch-off", execute, session))
 
     monkeypatch.setattr(calibration, "board_step", board_step)
@@ -28,7 +30,9 @@ def run(monkeypatch, execute=True, touch_off=None, answer=False, board_fails=Fal
     monkeypatch.setattr(calibration, "ask", lambda question: answer)
     config = Config()
     config.machine.gripper = gripper
-    asyncio.run(calibration.calibrate_scene(None, config, execute, touch_off))
+    robot = type("Robot", (), {"fresh": False})()
+    robot.start_fresh = lambda: setattr(robot, "fresh", True)
+    asyncio.run(calibration.calibrate_scene(robot, config, execute, touch_off))
     return calls
 
 

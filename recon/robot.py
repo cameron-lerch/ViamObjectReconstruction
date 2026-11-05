@@ -7,6 +7,7 @@ table and walls plus the obstacles we pass) without moving the arm.
 
 import asyncio
 import json
+import sys
 import logging
 import time
 
@@ -45,11 +46,9 @@ async def connect(config: Config) -> RobotClient:
     try:
         credentials = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError(f'Cannot read credentials from {path}; expected {{"key": ..., "key_id": ...}}') from error
-    options = RobotClient.Options.with_api_key(
-        api_key=credentials.get("key") or credentials["api_key"],
-        api_key_id=credentials.get("key_id") or credentials["api_key_id"],
-    )
+        raise RuntimeError(f'Cannot read credentials from {path}; expected {{"api_key": ..., "api_key_id": ...}}') from error
+    # The same names as the Viam app's CONNECT tab (API keys) and the SDK's code sample.
+    options = RobotClient.Options.with_api_key(api_key=credentials["api_key"], api_key_id=credentials["api_key_id"])
     # The SDK's background health check allows only 1s for a reply. While a 1.8MB
     # depth frame downloads over a cloud link that misses, and the SDK then closes
     # the channel mid-download. With the check off, a real disconnect still raises
@@ -107,6 +106,18 @@ class MoveDeclined(Exception):
     ''' The operator declined a move. '''
 
 
+def ask_operator(prompt: str) -> str:
+    ''' input(), after dropping anything typed while the arm was working: a stray key (an
+    arrow key and Enter, on 2026-11-05) otherwise answers the next question by itself. '''
+    try:
+        import termios
+        if sys.stdin.isatty():
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except (ImportError, OSError):  # not a terminal (or not Unix): nothing to drop
+        pass
+    return input(prompt)
+
+
 class Robot:
     def __init__(self, machine: RobotClient, config: Config):
         self.machine = machine
@@ -122,6 +133,8 @@ class Robot:
         # Off only for touch-off, which has to come close to the table on purpose.
         self.use_table_slab = True
         self._camera_mount: np.ndarray | None = None
+        # calibration.py starts fresh: the saved camera calibration is ignored until it saves a new one.
+        self.ignore_saved_calibration = False
         # Preview every move and ask the operator (see _confirm_move); with
         # confirm_above_deg set, only ask when some joint turns at least that far.
         self.confirm_moves = False
@@ -151,6 +164,8 @@ class Robot:
         the gripper's collision model found by `scan.py touch-off`.
         '''
         workspace = self.config.workspace
+        if not (workspace.x_range and workspace.y_range):
+            return []  # the survey hasn't found the table yet: Viam's own table only
         (x0, x1), (y0, y1) = workspace.x_range, workspace.y_range
         # 150mm past the search region, so paths that swing a little outside it are covered too.
         x0, x1, y0, y1 = x0 - 150, x1 + 150, y0 - 150, y1 + 150
@@ -188,24 +203,34 @@ class Robot:
             PoseInFrame(reference_frame=frame, pose=Pose(o_z=1)), "world"))
         return pose_to_matrix(result.pose)
 
+    def start_fresh(self) -> None:
+        ''' Forget this arm's saved camera calibration for the rest of the run (calibration.py
+        finds it again, starting from the camera frame in the Viam app). '''
+        self.ignore_saved_calibration = True
+        self._camera_mount = None
+
+    def use_camera_mount(self, mount: np.ndarray) -> None:
+        ''' Use `mount` for every move and capture from now on (in this run only; save_mount keeps it). '''
+        self._camera_mount = np.asarray(mount, dtype=float)
+
     async def camera_mount(self) -> np.ndarray:
         ''' The camera's pose relative to the arm's end.
 
-        From our own calibration file when `[machine] camera_mount_file` is set (so the
-        camera frame in the Viam app only affects its 3D scene), otherwise from the
-        machine's frame configuration.
+        From our own calibration file when `[machine] camera_mount_file` names one that
+        exists (so the camera frame in the Viam app only affects its 3D scene). A new arm
+        has none until its first calibration, which then starts from the camera frame
+        configured for this machine in the Viam app (whatever it's attached to: the arm's
+        end, or a gripper on it), never from another arm's calibration.
         '''
         self._mount_from_file()
         if self._camera_mount is None:
-            for part in await self.ask("the frame system", lambda: self.machine.get_frame_system_config()):
-                frame = part.frame
-                if frame.reference_frame == self.config.machine.camera:
-                    parent = frame.pose_in_observer_frame.reference_frame
-                    if parent != self.config.machine.arm:
-                        raise RuntimeError(f"Camera frame's parent is {parent!r}, expected the arm")
-                    self._camera_mount = pose_to_matrix(frame.pose_in_observer_frame.pose)
-            if self._camera_mount is None:
-                raise RuntimeError("Camera frame not found in the frame system")
+            names = self.config.machine
+            if getattr(self, "ignore_saved_calibration", False):
+                log.info("Starting fresh: the camera mount starts from the camera frame in the Viam app")
+            else:
+                log.info("No camera calibration for this arm yet (%s): starting from the camera frame in the Viam app",
+                         names.camera_mount_file or "camera_mount_file not set")
+            self._camera_mount = np.linalg.inv(await self.frame_pose(names.arm)) @ await self.frame_pose(names.camera)
         return self._camera_mount
 
     async def checked_camera_pose(self) -> np.ndarray:
@@ -237,15 +262,25 @@ class Robot:
         return frame, T_world
 
     def _mount_from_file(self) -> np.ndarray | None:
-        if self._camera_mount is None and self.config.machine.camera_mount_file:
+        if self._camera_mount is None and self.calibrated():
             path = self.config.resolve(self.config.machine.camera_mount_file)
             self._camera_mount = np.array(json.loads(path.read_text())["mount"])
         return self._camera_mount
 
+    def calibrated(self) -> bool:
+        ''' Whether this arm has its own camera calibration (the mount file exists). '''
+        file = self.config.machine.camera_mount_file
+        return bool(file) and self.config.resolve(file).exists() and not getattr(self, "ignore_saved_calibration", False)
+
     def camera_guard(self) -> list[Transform]:
         ''' Collision boxes for the camera body and its bracket, attached to the arm's end
         through our calibrated mount, so plans keep the real camera clear of everything
-        (see MachineConfig.camera_body_mm). '''
+        (see MachineConfig.camera_body_mm). Only from a calibrated mount: before an arm's
+        first calibration, the mount in use is a rough guess (boxes placed by a wrong
+        guess can overlap the arm itself, and then nothing can move), so the camera
+        geometry in the Viam app is all the planner checks. '''
+        if not self.calibrated():
+            return []
         mount = self._mount_from_file()
         if mount is None:
             return []
@@ -303,9 +338,12 @@ class Robot:
             constraints=self._constraints(linear),
         )
         try:
-            result = await self.motion.do_command({"plan": json_format.MessageToJson(request)}, timeout=60)
+            result = await self.motion.do_command({"plan": json_format.MessageToJson(request)},
+                                                  timeout=self.config.capture.plan_timeout_s)
         except GRPCError as error:
             return None, short_reason(error)
+        except (TimeoutError, asyncio.TimeoutError):  # the planner searched without finding a path
+            return None, f"the planner found no path within {self.config.capture.plan_timeout_s:.0f}s"
         return result.get("plan"), ""
 
     async def plan_best_roll(self, frame: str, pose_for_roll, world_state: WorldState | None = None,
@@ -422,7 +460,7 @@ class Robot:
         if self.confirm_above_deg is not None and abs(change[joint]) < self.confirm_above_deg:
             print(f"  moving (every joint under {self.confirm_above_deg:.0f}deg)")
             return
-        answer = await asyncio.to_thread(input, "  Press Enter to move, or type n to stop: ")
+        answer = await asyncio.to_thread(ask_operator, "  Press Enter to move, or type n to stop: ")
         if answer.strip().lower() in ("n", "no", "q", "stop"):
             raise MoveDeclined(f"Move of {frame} declined by the operator")
 
@@ -435,23 +473,25 @@ class Robot:
         return Constraints(linear_constraint=[LinearConstraint(line_tolerance_mm=2.0, orientation_tolerance_degs=2.0)])
 
     async def go_ready(self) -> None:
-        ''' Move the camera to the ready pose, looking straight down from `[machine]
-        ready_camera_mm` (the head-on view of the calibration mat), with one planned move
-        that avoids the table and everything the survey saw. Nothing moves when the camera
-        is already within 10mm of it, or when no ready pose is set. '''
-        ready = self.config.machine.ready_camera_mm
-        if len(ready) != 3:
-            log.info("No ready pose set ([machine] ready_camera_mm); starting from where the arm is")
+        ''' Move the camera to the home position saved in `[machine] home_file` (looking
+        straight down at the calibration mat; see MachineConfig.home_file), with one planned
+        move that avoids the table and everything the survey saw. Nothing moves when the
+        camera is already within 10mm of it, or when no home position has been found yet. '''
+        path = self.config.resolve(self.config.machine.home_file) if self.config.machine.home_file else None
+        if path is None or not path.exists():
+            log.info("No home position yet: it's set when the survey finds the ChArUco mat; starting from where the arm is")
             return
+        home = np.array(json.loads(path.read_text())["camera_mm"], dtype=float)
         camera = await self.checked_camera_pose()
-        if np.linalg.norm(camera[:3, 3] - ready) <= 10.0 and camera[2, 2] < -0.99:
-            log.info("Camera already at the ready pose")
+        if np.linalg.norm(camera[:3, 3] - home) <= 10.0 and camera[2, 2] < -0.99:
+            log.info("Camera already at the home position")
             return
-        log.info("Moving to the ready pose: camera at (%.0f, %.0f, %.0f), looking down", *ready)
+        log.info("Moving to the home position: camera at (%.0f, %.0f, %.0f), looking down at the mat", *home)
         frame = self.config.machine.camera
-        _, pose, reason = await self.plan_best_roll(frame, lambda roll: look_at(ready, [ready[0], ready[1], ready[2] - 100], roll))
+        _, pose, reason = await self.plan_best_roll(frame, lambda roll: look_at(home, home - [0.0, 0.0, 100.0], roll))
         if pose is None:
-            raise RuntimeError(f"Can't reach the ready pose: {reason}")
+            raise RuntimeError(f"Can't reach the home position ({path.name}): {reason}. If the mat or the arm moved, "
+                               "delete that file: the next run finds the mat again")
         await self.move(frame, pose)
 
     async def wait_until_still(self, timeout: float = 10.0) -> None:

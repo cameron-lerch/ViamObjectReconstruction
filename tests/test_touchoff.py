@@ -68,7 +68,7 @@ def test_spots_only_where_the_survey_saw_bare_table():
     assert spots and all(s[1] >= -500 + 30 for s in spots)  # a 40mm disc, 95% of it seen
 
 
-def test_travel_puts_the_fingertips_600mm_above_the_table():
+def test_travel_puts_the_fingertips_travel_height_above_the_table():
     assert travel_height(-12.0, 76.0) == -12.0 + 76.0 + TRAVEL
 
 
@@ -108,13 +108,19 @@ def test_spots_stay_near_the_scan_targets():
         assert CLEARANCE <= nearest <= CLEARANCE + VICINITY
 
 
-def test_camera_guard_sits_on_the_calibrated_camera_and_its_bracket():
+def test_camera_guard_sits_on_the_calibrated_camera_and_its_bracket(tmp_path):
+    import json
     from recon.transforms import pose_to_matrix
     robot = Robot.__new__(Robot)
     robot.config, robot.table_plane, robot.use_table_slab, robot.clutter = Config(), None, True, []
     mount = np.eye(4)
     mount[:3, 3] = [68.0, -35.0, 24.0]
     robot._camera_mount = mount
+    # Before an arm's first calibration the mount is a guess: no boxes, which could overlap
+    # the arm itself and block every move (armfarm12, 2026-11-05).
+    robot.config.machine.camera_mount_file = str(tmp_path / "mount.json")
+    assert robot.camera_guard() == []
+    (tmp_path / "mount.json").write_text(json.dumps({"mount": mount.tolist()}))
     body, bracket = robot.camera_guard()
     assert body.pose_in_observer_frame.reference_frame == "arm"
     T_body = pose_to_matrix(body.pose_in_observer_frame.pose)

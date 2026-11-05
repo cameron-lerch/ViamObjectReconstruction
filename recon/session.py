@@ -58,9 +58,19 @@ class Session:
         data.update(values)
         (self.root / "session.json").write_text(json.dumps(data, indent=2))
 
-    def save_scene(self, objects: list[DetectedObject], plane: TablePlane, clutter: list[DetectedObject] = ()) -> None:
+    def save_scene(self, objects: list[DetectedObject], plane: TablePlane, clutter: list[DetectedObject] = (),
+                   region: list[list[float]] | None = None) -> None:
         self.update(plane=plane.to_dict(), objects=[obj.to_dict() for obj in objects],
-                    clutter=[obj.to_dict() for obj in clutter])
+                    clutter=[obj.to_dict() for obj in clutter], region=region)
+
+    def load_region(self) -> list[list[float]] | None:
+        ''' The table area the survey saw ([[x0, x1], [y0, y1]]); for sessions from before
+        it was saved, the search region their config used. '''
+        data = self.read()
+        if data.get("region"):
+            return data["region"]
+        workspace = data.get("config", {}).get("workspace", {})
+        return [workspace["x_range"], workspace["y_range"]] if workspace.get("x_range") and workspace.get("y_range") else None
 
     def load_clutter(self) -> list[DetectedObject]:
         ''' Things on the table that aren't scan targets (obstacles all the same). '''

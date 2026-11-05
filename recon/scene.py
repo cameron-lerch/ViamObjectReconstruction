@@ -105,9 +105,12 @@ class DetectedObject:
 
 
 def in_workspace(points: np.ndarray, workspace: WorkspaceConfig, reach: float = 0.0) -> np.ndarray:
-    ''' Points in the table region, at least min_base_distance - `reach` from the arm's base. '''
-    (x0, x1), (y0, y1) = workspace.x_range, workspace.y_range
-    inside = (points[:, 0] >= x0) & (points[:, 0] <= x1) & (points[:, 1] >= y0) & (points[:, 1] <= y1)
+    ''' Points in the table area (all of them before the survey has found it), at least
+    min_base_distance - `reach` from the arm's base. '''
+    inside = np.ones(len(points), dtype=bool)
+    if workspace.x_range and workspace.y_range:
+        (x0, x1), (y0, y1) = workspace.x_range, workspace.y_range
+        inside = (points[:, 0] >= x0) & (points[:, 0] <= x1) & (points[:, 1] >= y0) & (points[:, 1] <= y1)
     return inside & (np.hypot(points[:, 0], points[:, 1]) >= workspace.min_base_distance - reach)
 
 

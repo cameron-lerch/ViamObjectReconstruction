@@ -34,11 +34,12 @@ class MachineConfig:
     # 20mm all round for not knowing exactly where the lens sits in it; its center is
     # this far along the viewing direction from the lens (behind it). The bracket box
     # (this wide and tall) runs from the arm's end flange to the camera.
-    # The ready pose: the camera at this point (world, mm), looking straight down; on
-    # armfarm14, about 322mm over the calibration mat, where its head-on view is taken.
-    # Every run that moves the arm starts with one planned move here (Robot.go_ready).
-    # On another arm, set its own (empty: start from wherever the arm is).
-    ready_camera_mm: list[float] = field(default_factory=lambda: [505.0, -400.0, 322.0])
+    # The home position: where the camera goes, looking straight down, at the start of every
+    # run that moves the arm (Robot.go_ready). It's found, not typed in: whenever the survey
+    # finds the ChArUco mat, the camera looks straight down at it (or from as close to it as
+    # the arm reaches) and that spot is saved in this file. No file yet: start from wherever
+    # the arm is, so the first run on a new arm should start with the camera over the table.
+    home_file: str = ""
     camera_body_mm: list[float] = field(default_factory=lambda: [130.0, 45.0, 45.0])
     camera_body_offset_mm: float = -12.5
     camera_bracket_mm: float = 40.0
@@ -46,15 +47,20 @@ class MachineConfig:
 
 @dataclass
 class WorkspaceConfig:
-    # Table region searched for objects.
-    x_range: list[float] = field(default_factory=lambda: [150.0, 650.0])
-    y_range: list[float] = field(default_factory=lambda: [-500.0, 180.0])
+    # Table area searched for objects (world, mm). Empty (the default): the table the survey
+    # actually saw, so nothing about the cell is typed in; Viam's own obstacles (walls, the
+    # table) keep the arm in bounds. Set both to search only part of the table.
+    x_range: list[float] = field(default_factory=list)
+    y_range: list[float] = field(default_factory=list)
     # Camera positions for the survey; the camera looks straight down from each.
     survey_positions: list[list[float]] = field(default_factory=list)
-    # Without survey_positions: a grid over the search region at this height, spaced so
-    # neighboring views overlap (the image's short side covers ~0.79 x height).
-    survey_height: float = 600.0
-    survey_spacing: float = 340.0
+    # Without survey_positions, the survey starts where the camera is and follows the
+    # table outward (pipeline.survey_table): views this high above the table, this far
+    # apart (neighboring views overlap: the image's short side covers ~0.79 x height),
+    # at most this many.
+    survey_height: float = 500.0  # 600mm was out of reach for an xArm6 (2026-11-05); 500mm suits every arm so far
+    survey_spacing: float = 280.0
+    survey_max_views: int = 40
     # Points within this horizontal distance of the arm's base are the arm itself (and,
     # on some cells, the cables around it); nothing whose middle is that close is a scan
     # target. An object farther out keeps its points up to 100mm closer (scene.BASE_REACH).
@@ -147,10 +153,6 @@ class ViewConfig:
     # model. Judgment: 80mm until 2026-10-30; lowered to 60mm with the 10deg ring, whose
     # camera is 81-95mm up on the test objects (80mm left only 1-2mm to spare).
     min_camera_height: float = 60.0
-    # Before the first view below this elevation (deg), ask the operator once per object,
-    # so someone is watching the arm when it goes that low (Enter: go on, n: skip those views).
-    # Set after adding the 10deg ring (2026-10-30), whose camera is 81-95mm above the table.
-    confirm_below_deg: float = 12.0
 
 
 @dataclass
@@ -164,6 +166,10 @@ class CaptureConfig:
     # Frames per survey view: finding objects needs less precision than scanning them.
     survey_frames: int = 1
     move_timeout_s: float = 60.0
+    # A plan-only request (robot.Robot.plan) answers in 0.03-0.6s when a path exists; past
+    # this, the pose counts as unreachable. Awkward poses could take the planner a minute each
+    # (60s, the old limit, left the xArm6 over the board for minutes on 2026-11-05).
+    plan_timeout_s: float = 10.0
     # Deadlines for single requests to the robot (robot.Robot.ask). A request with no answer is
     # asked once more; a second miss ends the run with the --resume command, instead of waiting
     # forever when viam-server restarts or the connection drops. Frames normally take 2-12s

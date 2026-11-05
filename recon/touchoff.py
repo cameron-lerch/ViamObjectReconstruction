@@ -38,7 +38,10 @@ from .transforms import make_transform, pose_to_matrix, rotation_z
 log = logging.getLogger(__name__)
 
 PAPER_MM = 0.1  # a sheet of printer paper
-TRAVEL = 600.0  # fingertips this far above the table while moving between spots
+# Fingertips this far above the table while moving between spots: clear of anything on it (every
+# move is also planned around what the survey saw). 600mm was out of the xArm6's reach with the
+# gripper pointing down at all but the nearest spots (armfarm12, 2026-11-05).
+TRAVEL = 300.0
 START_GAP = 10.0  # come straight down to this far above the table (by the measured reach)...
 UNMEASURED_GAP = 40.0  # ...or this far by the gripper model, if the reach was never measured (the model was 26mm short)
 STEP, MAX_STEP = 1.0, 5.0  # Enter steps 1mm; typing a number steps that far (up to 5mm)
@@ -192,10 +195,11 @@ async def lift_to(robot: Robot, z: float, world_state) -> None:
 
 
 async def touch_off(robot: Robot, objects: list[DetectedObject], plane: TablePlane, config: Config,
-                    execute: bool, board_center=None, survey_points: np.ndarray | None = None) -> dict | None:
+                    execute: bool, board_center=None, survey_points: np.ndarray | None = None,
+                    fresh: bool = False) -> dict | None:
     gripper = config.machine.gripper
     model = await modeled_reach(robot)
-    known = measured_reach(config)
+    known = None if fresh else measured_reach(config)
     expected = known if known is not None else model
     gap, floor_gap = (START_GAP, FLOOR) if known is not None else (UNMEASURED_GAP, 4 * FLOOR)
     margin = config.views.object_margin

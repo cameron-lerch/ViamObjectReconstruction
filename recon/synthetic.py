@@ -28,9 +28,11 @@ class SceneObject:
 class SyntheticScene:
     objects: list[SceneObject] = field(default_factory=list)
     table_color: tuple[float, float, float] = (0.75, 0.75, 0.72)
+    table_box: tuple[float, float, float, float] = (-300.0, -850.0, 1400.0, 1400.0)  # x0, y0, length, width (mm)
 
     def __post_init__(self):
-        table = o3d.geometry.TriangleMesh.create_box(1400, 1400, 20).translate((-300, -850, TABLE_Z - 20))
+        x0, y0, length, width = self.table_box
+        table = o3d.geometry.TriangleMesh.create_box(length, width, 20).translate((x0, y0, TABLE_Z - 20))
         self._meshes = [table] + [o.mesh for o in self.objects]
         self._colors = np.array([self.table_color] + [o.color for o in self.objects])
         self._scene = o3d.t.geometry.RaycastingScene()

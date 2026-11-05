@@ -13,6 +13,10 @@
    objects until the paper drags, which measures how far the fingertips reach.
    Only needed for a new arm or gripper, or if something was changed or bumped.
 
+Every run starts fresh, from wherever the arm is: nothing an earlier calibration saved is
+used (the home position, where the mat was, the camera mount, the touch-off's reach); all
+of it is found again and saved anew. Scans then use what it saved.
+
 Each step is also available on its own (see `python scan.py --help`), with
 options for watching the arm move by move.
 '''
@@ -22,20 +26,24 @@ import asyncio
 import logging
 
 from recon.config import load_config
+from recon.robot import ask_operator
 from scan import board_step, survey_step, touch_off_step, with_robot
 
 log = logging.getLogger("calibration")
 
 
 def ask(question: str) -> bool:
-    return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
+    return ask_operator(f"{question} [y/N] ").strip().lower() in ("y", "yes")
 
 
 async def calibrate_scene(robot, config, execute: bool, touch_off: bool | None) -> None:
     ''' The three steps in order. `touch_off`: True or False to decide up front, None to ask. '''
     log.info("\n== 1/3 Camera: calibrating with the ChArUco board ==")
     try:
-        board = await board_step(robot, config, execute, save_mount=execute)
+        # Start fresh: nothing saved by an earlier calibration counts (where the mat was, the
+        # camera mount, the home position); everything is found again and saved anew.
+        robot.start_fresh()
+        board = await board_step(robot, config, execute, save_mount=execute, fresh=True)
     except RuntimeError as problem:
         log.error("The camera calibration stopped: %s. Is the ChArUco board flat on the table and uncovered?", problem)
         return
@@ -54,7 +62,7 @@ async def calibrate_scene(robot, config, execute: bool, touch_off: bool | None) 
         touch_off = execute and await asyncio.to_thread(
             ask, "Run the touch-off now? You need to be at the arm with a sheet of paper.")
     if config.machine.gripper and (touch_off or not execute):
-        await touch_off_step(robot, config, execute, session)
+        await touch_off_step(robot, config, execute, session, fresh=True)
     elif config.machine.gripper:
         log.info("Skipped; the last touch-off's result stays in use (calibration/*touch_off.json).")
 
@@ -78,7 +86,8 @@ def main() -> None:
                            "(about 5 minutes; Ctrl+C or the e-stop stops it). Start?"):
         return
     touch_off = {"ask": None, "yes": True, "no": False}[args.touch_off]
-    asyncio.run(with_robot(config, lambda robot: calibrate_scene(robot, config, execute, touch_off), go_ready=execute))
+    # No move to the home position first: calibration starts from wherever the arm is (and sets home anew).
+    asyncio.run(with_robot(config, lambda robot: calibrate_scene(robot, config, execute, touch_off), go_ready=False))
 
 
 if __name__ == "__main__":

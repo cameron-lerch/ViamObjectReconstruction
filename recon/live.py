@@ -178,7 +178,13 @@ class Live:
         name = self.config.live.monitor_camera
         if name:
             from viam.components.camera import Camera
-            self._monitor_task = loop.create_task(self._monitor(Camera.from_robot(robot.machine, name)))
+            try:
+                camera = Camera.from_robot(robot.machine, name)
+            except Exception as error:  # a preview must never stop the scan: run without the stream
+                log.warning("No monitoring camera %r on this machine (%s); the viewer runs without it", name, error)
+                self.update(monitor=False)
+            else:
+                self._monitor_task = loop.create_task(self._monitor(camera))
         self.update(state="running")
 
     async def checkpoint(self) -> None:

@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from .board import BoardSpec, depth_model, detect, hand_eye, locate_flat
 from .calibrate import MountCalibration, apply_mount, calibrate_mount
@@ -20,11 +21,11 @@ from .progression import progression
 from .reconstruct import reconstruct, save_reconstruction
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
 from .rgbd import back_project, load_view, load_views, save_frames, save_view
-from .robot import MissedTarget, MoveDeclined, Robot, RobotUnresponsive
+from .robot import MissedTarget, MoveDeclined, Robot, RobotUnresponsive, ask_operator
 from .scene import DetectedObject, TablePlane, clutter_around, detect_objects, fit_table_plane, merge_views, views_agree
 from .session import Session
 from .survey_map import survey_map
-from .transforms import look_at
+from .transforms import look_at, rotation_angle_deg
 
 log = logging.getLogger(__name__)
 
@@ -53,8 +54,10 @@ async def move_camera_looking_down(robot: Robot, x: float, y: float, z: float, w
         return False
     try:
         await robot.move(camera, pose, world_state)
-    except MissedTarget as missed:  # skip this position rather than capture from the wrong place
-        log.warning("Overhead view at (%.0f, %.0f, %.0f) skipped: %s", x, y, z, missed)
+    except (MoveDeclined, RobotUnresponsive):  # Stop, or the robot stopped answering: end the run
+        raise
+    except Exception as error:  # missed the target, or the move's own plan failed: skip this position
+        log.warning("Overhead view at (%.0f, %.0f, %.0f) skipped: %s", x, y, z, why_skipped(error))
         return False
     return True
 
@@ -76,32 +79,14 @@ async def go_home(robot: Robot, session: Session, config: Config) -> None:
     await move_camera_looking_down(robot, x, y, config.workspace.survey_height, robot.world_state([], 0.0))
 
 
-def survey_grid(config: Config) -> dict[tuple[int, int], np.ndarray]:
-    ''' Overhead camera positions over the search region, keyed by (column, row), skipping
-    only positions right over the arm's base (the camera may look at table near the
-    base: the scan targets aren't there, but their surroundings and obstacles can be).
-    With `[workspace] survey_positions` set, those are used instead. '''
-    workspace = config.workspace
-    if workspace.survey_positions:
-        return {(k, 0): np.array(p, dtype=float) for k, p in enumerate(workspace.survey_positions)}
-    cells = {}
-    (x0, x1), (y0, y1) = workspace.x_range, workspace.y_range
-    nx = max(1, int(np.ceil((x1 - x0) / workspace.survey_spacing)))
-    ny = max(1, int(np.ceil((y1 - y0) / workspace.survey_spacing)))
-    for i in range(nx):
-        for j in range(ny):
-            x, y = x0 + (i + 0.5) * (x1 - x0) / nx, y0 + (j + 0.5) * (y1 - y0) / ny
-            if np.hypot(x, y) >= workspace.base_clearance:
-                cells[(i, j)] = np.array([x, y, workspace.survey_height])
-    return cells
-
-
 def table_continues(points: np.ndarray, plane: TablePlane, here: np.ndarray, toward: np.ndarray,
                     min_share: float = 0.3) -> bool:
     ''' Whether the part of this view facing a neighboring position still shows table.
 
     Looks at the strip of points beyond a quarter of the way to the neighbor:
-    floor, walls or nothing at all (out of depth range) don't count as table.
+    floor, walls or nothing at all (out of depth range) don't count as table. The
+    table must also be seen at least halfway to the neighbor: past a table's edge
+    there may be no points at all, so a share of points alone can't tell.
     '''
     direction = (toward - here)[:2]
     distance = np.linalg.norm(direction)
@@ -112,52 +97,130 @@ def table_continues(points: np.ndarray, plane: TablePlane, here: np.ndarray, tow
     if len(strip) < 500:
         return False
     on_table = np.abs(plane.height(strip)) < 10
+    if not on_table.any() or np.percentile(along[along > 0.25 * distance][on_table], 99) < 0.5 * distance:
+        return False
     return bool(on_table.mean() >= min_share)
 
 
+class NeedsTable(RuntimeError):
+    ''' The survey can't start: the camera isn't over the table. Jog the arm there and run again. '''
+
+
+MIN_LOOK_DOWN = 0.5  # the camera must point at least 30deg below horizontal to start a survey
+TABLE_BAND_MM = 10.0  # points this close to a view's table plane count as table, for the table area
+
+
+def survey_lattice_neighbors(key: tuple[int, int]) -> list[tuple[int, int]]:
+    return [(key[0] + di, key[1] + dj) for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+
+
 async def survey_table(robot: Robot, session: Session, config: Config) -> list:
-    ''' Overhead views that follow the table: start over it, and only go on to a
-    neighboring grid position if this view's side facing it still shows table. '''
-    cells = survey_grid(config)
-    reachable = {}
-    for key, (x, y, z) in cells.items():
-        _, pose, reason = await robot.plan_best_roll(config.machine.camera, lambda r, x=x, y=y, z=z: look_at([x, y, z], [x, y, z - 100], r))
-        if pose is not None:
-            reachable[key] = cells[key]
-        else:
-            log.info("  survey position (%.0f, %.0f) unreachable: %s", x, y, reason)
-    if not reachable:
-        raise RuntimeError("No survey position is reachable")
-    here = (await robot.checked_camera_pose())[:3, 3]
-    frontier = {min(reachable, key=lambda k: np.linalg.norm(reachable[k][:2] - here[:2]))}
-    visited, folders, plane = set(), [], None
-    while frontier:
-        key = min(frontier, key=lambda k: np.linalg.norm(reachable[k][:2] - here[:2]))
+    ''' Overhead views that find the table from where the camera is, then follow it outward.
+
+    1. Look before moving: the first picture is taken from wherever the camera is (it must
+       point down at the table; otherwise NeedsTable asks to jog the arm over it), and the
+       table is found in it. It's saved as survey/first_look, apart from the survey views.
+    2. Small moves next: the camera only turns to look straight down and rises (or lowers)
+       to `survey_height` above that table, over the same spot.
+    3. Then outward on a lattice `survey_spacing` apart, starting there: the camera goes on
+       to a neighboring position only if its last picture still shows table on that side, so
+       it stops at the table's edges; positions the planner can't reach (out of reach, or
+       blocked by Viam's obstacles, like walls) are skipped. At most `survey_max_views`.
+    With `[workspace] survey_positions` set, the camera looks down from those instead.
+    '''
+    workspace = config.workspace
+    folders = []
+
+    async def look(extra: dict) -> Path:
+        folder = await capture_view(robot, session.survey_dir / f"view_{len(folders):03d}",
+                                    {"frames": config.capture.survey_frames, **extra}, config.capture.survey_frames)
+        folders.append(folder)
+        return folder
+
+    if workspace.survey_positions:
+        for k, (x, y, z) in enumerate(workspace.survey_positions):
+            if await move_camera_looking_down(robot, x, y, z):
+                await look({"position": k})
+        return folders
+
+    start = await robot.checked_camera_pose()
+    if start[2, 2] > -MIN_LOOK_DOWN:
+        raise NeedsTable("The camera isn't looking down at the table (it points %.0fdeg below horizontal). Jog the arm "
+                         "so the camera is over the table, looking down, and run again" % np.degrees(np.arcsin(max(-1.0, -start[2, 2]))))
+    # Only to find the table: objects are found in the straight-down views that follow, as
+    # an angled view from close up fits the table less reliably.
+    first = await capture_view(robot, session.survey_dir / "first_look", {"frames": config.capture.survey_frames},
+                               config.capture.survey_frames)
+    try:
+        plane = fit_table_plane(scene_points([first], config), workspace)
+    except RuntimeError as error:
+        raise NeedsTable("The camera doesn't see the table from where it is. Jog the arm so the camera is over the "
+                         "table, looking down, and run again") from error
+
+    x, y, z = start[:3, 3]
+    anchor, step, height = np.array([x, y]), workspace.survey_spacing, workspace.survey_height
+
+    def position(key: tuple[int, int]) -> np.ndarray:
+        xy = anchor + step * np.array(key, dtype=float)
+        return np.array([*xy, plane.z_at(*xy) + height])
+
+    log.info("Table found from where the camera is; looking straight down from %.0fmm above it, then following "
+             "the table outward in %.0fmm steps", height, step)
+    if not await move_camera_looking_down(robot, *position((0, 0))):
+        # Survey height out of reach here: survey from the camera's own height instead.
+        height = z - plane.z_at(x, y)
+        log.info("  survey height unreachable here; surveying from %.0fmm above the table instead", height)
+        if not await move_camera_looking_down(robot, x, y, z):
+            raise NeedsTable("The arm can't look straight down from where the camera is. Jog it over the table and run again")
+    here = (0, 0)
+    points = scene_points([await look({"grid": [0, 0]})], config)
+    visited, frontier = {here}, set()
+
+    def extend(key, points):
+        for neighbor in survey_lattice_neighbors(key):
+            if neighbor in visited or neighbor in frontier:
+                continue
+            p = position(neighbor)
+            if np.hypot(*p[:2]) < workspace.base_clearance:
+                visited.add(neighbor)  # right over the arm's base
+            elif table_continues(points, plane, position(key), p):
+                frontier.add(neighbor)
+            else:
+                visited.add(neighbor)  # off the table (or nothing to see) in that direction
+                log.info("  not surveying (%.0f, %.0f): no table in that direction", *p[:2])
+
+    extend(here, points)
+    while frontier and len(folders) < workspace.survey_max_views:
+        key = min(frontier, key=lambda k: np.linalg.norm(position(k)[:2] - position(here)[:2]))
         frontier.discard(key)
         visited.add(key)
-        x, y, z = reachable[key]
-        if not await move_camera_looking_down(robot, x, y, z):
+        if not await move_camera_looking_down(robot, *position(key)):
             continue
-        folder = await capture_view(robot, session.survey_dir / f"view_{len(folders):03d}",
-                                    {"frames": config.capture.survey_frames, "grid": list(key)}, config.capture.survey_frames)
-        folders.append(folder)
-        here = reachable[key]
-        points = scene_points([folder], config)
-        if plane is None:
-            try:
-                plane = fit_table_plane(points, config.workspace)
-            except RuntimeError as error:
-                raise RuntimeError("The first survey view shows no table; start with the camera over the table") from error
-        for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            neighbor = (key[0] + di, key[1] + dj)
-            if neighbor in reachable and neighbor not in visited and neighbor not in frontier:
-                if table_continues(points, plane, reachable[key], reachable[neighbor]):
-                    frontier.add(neighbor)
-                else:
-                    visited.add(neighbor)  # off the table (or nothing to see) in that direction
-                    log.info("  not surveying (%.0f, %.0f): no table in that direction", *reachable[neighbor][:2])
-    log.info("Surveyed %d of %d grid positions (the rest are off the table or unreachable)", len(folders), len(cells))
+        here = key
+        points = scene_points([await look({"grid": list(key)})], config)
+        extend(key, points)
+    if frontier:
+        log.warning("  stopped after %d survey views (survey_max_views); %d more positions showed table", len(folders), len(frontier))
+    log.info("Surveyed the table from %d positions (it ends, or the arm can't reach, in every other direction)", len(folders))
     return folders
+
+
+def table_area(clouds: list[tuple[np.ndarray, np.ndarray]]) -> list[list[float]] | None:
+    ''' The table area the survey saw, [[x0, x1], [y0, y1]]: where its views' points lie on
+    their table plane (0.5th to 99.5th percentile, so a few stray points don't stretch it). '''
+    table = [points[np.abs(heights) < TABLE_BAND_MM, :2] for points, heights in clouds]
+    table = np.concatenate([t for t in table if len(t)]) if any(len(t) for t in table) else np.empty((0, 2))
+    if len(table) < 1000:
+        return None
+    low, high = np.percentile(table, 0.5, axis=0), np.percentile(table, 99.5, axis=0)
+    return [[round(float(low[0]), 1), round(float(high[0]), 1)], [round(float(low[1]), 1), round(float(high[1]), 1)]]
+
+
+def use_table_area(config: Config, region: list[list[float]] | None) -> None:
+    ''' Search the table area the survey saw, unless config.toml sets one. '''
+    workspace = config.workspace
+    if region and not (workspace.x_range and workspace.y_range):
+        workspace.x_range, workspace.y_range = list(region[0]), list(region[1])
 
 
 async def survey(robot: Robot, session: Session, config: Config, execute: bool) -> tuple[list[DetectedObject], TablePlane]:
@@ -185,6 +248,10 @@ async def survey(robot: Robot, session: Session, config: Config, execute: bool) 
         skipped.append((view.camera_position[:2], others))
         planes.append(view_plane)
         clouds.append((points, view_plane.height(points)))
+    region = table_area(clouds)
+    use_table_area(config, region)
+    if region:
+        log.info("Table area seen: x %.0f to %.0f, y %.0f to %.0f", *region[0], *region[1])
     # A patch of bad depth (on bare table near an image's edge, say) can look like a
     # small object in one view. Keep an object only if at least half of the views that
     # saw its spot saw something standing there (on armfarm14, every such phantom was
@@ -202,7 +269,7 @@ async def survey(robot: Robot, session: Session, config: Config, execute: bool) 
     # Keep the table as seen by the camera closest to the objects.
     middle = np.mean([obj.center[:2] for obj in objects], axis=0) if objects else detections[0][0]
     plane = planes[int(np.argmin([np.linalg.norm(camera_xy - middle) for camera_xy, _ in detections]))]
-    session.save_scene(objects, plane, clutter)
+    session.save_scene(objects, plane, clutter, region)
     robot.set_scene(plane, clutter)
     try:  # a picture for people: it must never stop the survey
         picture = survey_map(session, objects, clutter, config, plane.z_at(*middle))
@@ -255,10 +322,28 @@ def find_board(folders, spec: BoardSpec):
     return locate_flat(view, found, spec), found, tilt
 
 
+HOME_SLIDE_MM = 25.0  # how far each try moves toward the arm when the mat's center is out of reach
+HOME_SLIDE_MAX_MM = 250.0
+
+
 async def view_board_head_on(robot: Robot, session: Session, config: Config, center: np.ndarray) -> dict:
-    ''' Look straight down at the board's center so all of it is in view, and check it. '''
+    ''' Look straight down at the board's center so all of it is in view, and check it. If
+    the arm can't reach over the center, look from as close to it as it can, sliding toward
+    the arm's base. Where the camera ends up becomes the home position (save_home). '''
     spec = BoardSpec()
-    if not await move_camera_looking_down(robot, center[0], center[1], center[2] + config.board.view_height):
+    toward_base = -center[:2] / np.linalg.norm(center[:2])
+    height = center[2] + config.board.view_height
+    for slide in np.arange(0.0, HOME_SLIDE_MAX_MM + 1, HOME_SLIDE_MM):
+        x, y = center[:2] + slide * toward_base
+        _, pose, _ = await robot.plan_best_roll(config.machine.camera, lambda r, x=x, y=y: look_at([x, y, height], [x, y, height - 100], r))
+        if pose is not None:
+            break
+    else:
+        log.warning("  can't look down at the board from within %.0fmm of its center; no head-on view", HOME_SLIDE_MAX_MM)
+        return {}
+    if slide:
+        log.info("  the board's center is out of reach; looking down from %.0fmm closer to the arm", slide)
+    if not await move_camera_looking_down(robot, x, y, height):
         return {}
     # 3 frames, not the scan's frames_per_view (50 in a full scan): the board's pose and
     # depth check need no more, and each frame costs about 2.6s over the cloud connection.
@@ -275,6 +360,7 @@ async def view_board_head_on(robot: Robot, session: Session, config: Config, cen
              len(found.ids), (spec.squares_x - 1) * (spec.squares_y - 1), found.reprojection_px, tilt,
              depth.get("median_error_mm", float("nan")))
     T_world_board = locate_flat(view, found, spec)
+    save_home(config, np.array([x, y, height]), center, float(slide))
     return {"pose": T_world_board.tolist(), "center": (T_world_board @ np.append(spec.center, 1.0))[:3].tolist(),
             "head_on": {"corners": int(len(found.ids)), "reprojection_px": found.reprojection_px,
                         "tilt_deg": tilt, "depth": depth}}
@@ -297,7 +383,7 @@ async def locate_near(robot: Robot, x: float, y: float, plane: TablePlane, sessi
 
 
 async def confirm(prompt: str) -> bool:
-    answer = await asyncio.to_thread(input, f"{prompt} [Enter = yes, n = skip] ")
+    answer = await asyncio.to_thread(ask_operator, f"{prompt} [Enter = yes, n = skip] ")
     return answer.strip().lower() not in ("n", "no", "q")
 
 
@@ -463,23 +549,8 @@ async def scan_object(robot: Robot, session: Session, obj: DetectedObject, other
         robot.live.start_object(session.root.name, target, plane, len(done) + len(views))
         for count, (_, folder, _) in enumerate(done):  # the preview starts where the scan left off
             robot.live.view_captured(folder, count)
-    asked_low = skip_low = False
     for number, view in enumerate(views):
         index = first + number
-        low = view.candidate.elevation_deg < config.views.confirm_below_deg
-        if low and not asked_low:
-            asked_low = True
-            ring = [v for v in views[number:] if v.candidate.elevation_deg < config.views.confirm_below_deg]
-            height = view.T_world_cam[2, 3] - plane.z_at(*view.T_world_cam[:2, 3])
-            question = (f"Next: {len(ring)} low view(s) at {view.candidate.elevation_deg:.0f}deg, the camera about "
-                        f"{height:.0f}mm above the table. Watching the arm?")
-            if robot.live:
-                robot.live.message("Waiting at the terminal: confirm the low views")
-            skip_low = not await confirm(question)
-            if skip_low:
-                log.info("  skipping the %d low view(s)", len(ring))
-        if low and skip_low:
-            continue
         try:
             await robot.move(config.machine.camera, view.T_world_cam, world_state)
         except MoveDeclined:  # End Scan, STOP, or a declined preview: end here, not "skip this view"
@@ -588,7 +659,7 @@ def finish_object(session: Session, object_id: int, plane: TablePlane, config: C
 async def search_for_board(robot: Robot, session: Session, config: Config, spec: BoardSpec,
                            search: bool) -> np.ndarray | None:
     ''' Where the board is, roughly, from color-only views (about 0.15s each): first from
-    where the camera is, then (with `search`) from the survey grid, nearest first. '''
+    where the camera is, then (with `search`) from overhead positions around it, nearest first. '''
     async def look(name: str):
         folder = await capture_view(robot, session.root / "board" / name, frames=1, depth=False)
         view = load_view(folder)
@@ -603,7 +674,11 @@ async def search_for_board(robot: Robot, session: Session, config: Config, spec:
     if center is not None or not search:
         return center
     here = (await robot.checked_camera_pose())[:3, 3]
-    for index, (x, y, z) in enumerate(sorted(survey_grid(config).values(), key=lambda p: np.linalg.norm(p[:2] - here[:2])), 1):
+    workspace = config.workspace
+    # Overhead positions around where the camera is (up to 3 survey steps away), nearest first.
+    steps = np.array([(i, j) for i in range(-3, 4) for j in range(-3, 4)], dtype=float) * workspace.survey_spacing
+    spots = [here[:2] + s for s in sorted(steps, key=np.linalg.norm) if np.hypot(*(here[:2] + s)) >= workspace.base_clearance]
+    for index, (x, y, z) in enumerate((np.array([*xy, workspace.survey_height]) for xy in spots), 1):
         if await move_camera_looking_down(robot, x, y, z):
             center = await look(f"search_{index:03d}")
             if center is not None:
@@ -621,10 +696,36 @@ async def board_calibration(robot: Robot, session: Session, config: Config, exec
     sensor's error.
     '''
     spec = spec or BoardSpec()
-    if known_center is None:
+    found_from_here = known_center is None
+    if found_from_here:
         known_center = await search_for_board(robot, session, config, spec, execute)
         if known_center is None:
             raise RuntimeError("The board isn't in view; add --execute to search for it (color-only, quick), or run a survey")
+    if execute and found_from_here:
+        # No saved record of this arm's board: its camera mount isn't trusted yet (a new arm's
+        # can be off by tens of degrees, which puts the board hundreds of mm from where it
+        # is). So first a rough calibration in place, from small turns of the camera that keep
+        # the board in view, before moving anywhere; then the board's center through it.
+        # The search may have caught the board at the edge of a picture: center it first, so
+        # the small turns keep all of it in view. The mount from the Viam app's camera frame
+        # is close enough to aim with (it put the board about 25mm off on armfarm12).
+        if not await move_camera_looking_down(robot, known_center[0], known_center[1],
+                                              known_center[2] + config.board.view_height):
+            log.info("  can't look straight down at the board's rough center; turning from where the camera is")
+        log.info("Rough calibration first, turning the camera a little in place over the board")
+        start = await capture_view(robot, session.root / "board" / "start", {"frames": 3}, 3)
+        view = load_view(start)
+        found = detect(view, spec)
+        if found is None:
+            raise RuntimeError("The board isn't in view over its rough center; is the camera frame in the Viam app "
+                               "roughly where the camera really is?")
+        log.info("  %d of %d corners in view", len(found.ids), (spec.squares_x - 1) * (spec.squares_y - 1))
+        mount = await rough_mount(robot, session, config, spec, view, found)
+        view = replace(view, T_world_cam=view.T_world_cam @ np.linalg.inv(await robot.camera_mount()) @ mount)
+        robot.use_camera_mount(mount)
+        known_center = (locate_flat(view, found, spec) @ np.append(spec.center, 1.0))[:3]
+        log.info("  board centered at (%.0f, %.0f, %.0f) through the rough mount, %.1fdeg from level",
+                 *known_center, board_tilt(view, found))
     if not execute:
         center = known_center
         log.info("Planning around the board centered at (%.0f, %.0f, %.0f)", *center)
@@ -634,15 +735,31 @@ async def board_calibration(robot: Robot, session: Session, config: Config, exec
         located = await capture_view(robot, session.root / "board" / "located", {"frames": 3}, 3)
         view = load_view(located)
         found = detect(view, spec)
+        if found is None and not found_from_here:
+            # Not where this arm last saw it: the mat was moved. Look for it as on a first run.
+            log.info("The board isn't where this arm last saw it; looking for it from here and nearby")
+            known_center = await search_for_board(robot, session, config, spec, True)
+            if known_center is not None:
+                await move_camera_looking_down(robot, known_center[0], known_center[1], known_center[2] + config.board.view_height)
+                view = load_view(await capture_view(robot, session.root / "board" / "located", {"frames": 3}, 3))
+                found = detect(view, spec)
         if found is None:
             raise RuntimeError("The board isn't in the head-on view")
-        # The mat lies on the table, so it must look level. If it doesn't, the camera
-        # mount we're using is wrong, and every planned view would miss the board.
-        normal = (view.T_world_cam @ found.T_cam_board)[:3, 2]
-        tilt = float(np.degrees(np.arccos(min(1.0, abs(normal[2])))))
+        # The mat lies on the table, so it must look level. If it doesn't, the camera mount
+        # we're using is wrong (as on a new arm, before its first calibration), and the
+        # planned views could miss the board: first solve a rough mount from a few small
+        # turns of the camera, which keep the board in view.
+        tilt = board_tilt(view, found)
         if tilt > MAX_BOARD_TILT_DEG:
-            raise RuntimeError(f"The board looks {tilt:.1f}deg from level through the camera mount in use; "
-                               "fix the camera mount (scan.py calibrate --save-mount) before calibrating")
+            log.info("The board looks %.1fdeg from level through the camera mount in use (expected on a new arm); "
+                     "turning the camera a little in place to estimate a rough mount first", tilt)
+            mount = await rough_mount(robot, session, config, spec, view, found)
+            view = replace(view, T_world_cam=view.T_world_cam @ np.linalg.inv(await robot.camera_mount()) @ mount)
+            robot.use_camera_mount(mount)
+            tilt = board_tilt(view, found)
+            if tilt > MAX_BOARD_TILT_DEG:
+                raise RuntimeError(f"The board still looks {tilt:.1f}deg from level after the rough calibration; "
+                                   "is it flat on the table?")
         T_world_board = locate_flat(view, found, spec)
         center = (T_world_board @ np.append(spec.center, 1.0))[:3]
         log.info("Board head-on: %d corners, %.2fpx, %.1fdeg from level; center (%.0f, %.0f, %.0f)",
@@ -680,7 +797,13 @@ async def board_calibration(robot: Robot, session: Session, config: Config, exec
     mount = await robot.camera_mount()
     views, found_views, ends = [], [], []
     for index, pose in enumerate(chosen):
-        await robot.move(camera, pose)
+        try:
+            await robot.move(camera, pose)
+        except (MoveDeclined, RobotUnresponsive):
+            raise
+        except Exception as error:  # the move's own plan can fail where the plan-only check passed
+            log.warning("  view %d/%d skipped: %s", index + 1, len(chosen), why_skipped(error))
+            continue
         folder = await capture_view(robot, session.root / "board" / f"view_{index:03d}",
                                     {"frames": config.board.frames}, config.board.frames)
         board_view = load_view(folder)
@@ -699,6 +822,58 @@ async def board_calibration(robot: Robot, session: Session, config: Config, exec
               "hand_eye": diagnostics, "depth": depth_model(views, found_views)}
     session.write_json(session.root / "board" / "board_calibration.json", result)
     return result
+
+
+def board_tilt(view, found) -> float:
+    ''' How far from level (degrees) the board looks in `view`, through the camera mount it was taken with. '''
+    normal = (view.T_world_cam @ found.T_cam_board)[:3, 2]
+    return float(np.degrees(np.arccos(min(1.0, abs(normal[2])))))
+
+
+ROUGH_TURNS_DEG = (("x", 8.0), ("x", -8.0), ("y", 8.0), ("y", -8.0), ("z", 10.0), ("z", -10.0))
+
+
+async def rough_mount(robot: Robot, session: Session, config: Config, spec: BoardSpec, view, found) -> np.ndarray:
+    ''' A rough camera mount from the board seen while the camera only turns in place (8-10deg
+    each way from `view`, so the board stays in view): enough to plan the full calibration's
+    views. In simulation it recovered mounts that were 2-44deg and 22-55mm off to within
+    0.1deg and 0.5mm, from these 7 views. '''
+    mount = await robot.camera_mount()
+    ends, founds = [view.T_world_cam @ np.linalg.inv(mount)], [found]
+    for index, (axis, angle) in enumerate(ROUGH_TURNS_DEG):
+        target = view.T_world_cam.copy()
+        target[:3, :3] = view.T_world_cam[:3, :3] @ Rotation.from_euler(axis, angle, degrees=True).as_matrix()
+        try:
+            await robot.move(config.machine.camera, target)
+        except Exception as error:  # an unreachable turn: use the others
+            log.info("  turn %d skipped: %s", index + 1, error)
+            continue
+        folder = await capture_view(robot, session.root / "board" / f"rough_{index:03d}", {"frames": 3}, 3)
+        turned = load_view(folder)
+        seen = detect(turned, spec)
+        if seen is not None:
+            ends.append(turned.T_world_cam @ np.linalg.inv(mount))
+            founds.append(seen)
+    if len(founds) < 5:
+        raise RuntimeError(f"Only {len(founds)} views of the board while turning the camera; is it in view?")
+    rough, _, diagnostics = hand_eye(ends, founds, view.intrinsics.matrix, mount)
+    log.info("  rough mount from %d views: %.1fmm / %.1fdeg from the one in use (%.2fpx)", len(founds),
+             np.linalg.norm(rough[:3, 3] - mount[:3, 3]), rotation_angle_deg(mount[:3, :3].T @ rough[:3, :3]),
+             diagnostics.get("reprojection_rms_px_after", float("nan")))
+    return rough
+
+
+def save_home(config: Config, camera: np.ndarray, board_center: np.ndarray, slide_mm: float) -> None:
+    ''' Make `camera` (looking straight down at the board) the home position every run starts at. '''
+    if not config.machine.home_file:
+        return
+    path = config.resolve(config.machine.home_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"camera_mm": camera.round(1).tolist(), "board_center_mm": board_center.round(1).tolist(),
+                                "slid_toward_arm_mm": slide_mm, "saved": time.strftime("%Y-%m-%d %H:%M"),
+                                "note": "Home position: the camera here, looking straight down at the ChArUco mat. "
+                                        "Found by the survey; delete this file to find it again."}, indent=2) + "\n")
+    log.info("  home position saved: camera at (%.0f, %.0f, %.0f), looking down at the mat (%s)", *camera, path.name)
 
 
 def save_mount(config: Config, mount: np.ndarray, source: str) -> Path:

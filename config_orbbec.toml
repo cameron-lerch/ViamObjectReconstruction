@@ -7,8 +7,8 @@
 
 [machine]
 rig = "orbbec"                # saved with every session, to tell rigs apart in comparisons
-address = "SET-ME.viam.cloud" # SET: the machine's address (Viam app, CONNECT tab)
-credentials = "apikey_orbbec.json"  # SET: {"key": "...", "key_id": "..."} for this machine; kept out of git
+address = "SET-ME.viam.cloud" # SET: the machine's remote address (Viam app, CONNECT tab)
+credentials = "apikey_orbbec.json"  # SET: {"api_key": "...", "api_key_id": "..."} for this machine; kept out of git
 arm = "arm"                   # SET: component names as configured on this machine
 camera = "cam"                # SET
 color_source = "color"        # SET: the camera's get_images source names
@@ -18,9 +18,8 @@ motion = "builtin"
 # Its own calibration: calibration.py writes this file (never share armfarm14's).
 camera_mount_file = "calibration/orbbec_camera_mount.json"
 touch_off_file = ""
-# SET: this arm's ready pose: the camera's position (world, mm), looking straight down,
-# about 300mm over the mat. Empty: runs start from wherever the arm is.
-ready_camera_mm = []
+# Home position: found and saved automatically when the survey finds the ChArUco mat.
+home_file = "calibration/orbbec_home.json"
 
 [workspace]
 # SET: the table region searched for objects on this cell, clear of its walls.

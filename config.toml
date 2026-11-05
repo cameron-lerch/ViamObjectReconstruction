@@ -2,30 +2,36 @@
 # recon/config.py, where every setting is documented. Distances are mm, world frame.
 
 [machine]
-rig = "armfarm14-realsense"    # saved with every session, to tell rigs apart in comparisons
-address = "armfarm14-main.310sld03v2.viam.cloud"
-credentials = "apikey.json"   # {"key": "...", "key_id": "..."}, kept out of git
+rig = "armfarm12-xarm6-realsense"  # saved with every session, to tell rigs apart in comparisons (armfarm14-realsense: the UFactory 850)
+address = "armfarm12-main.310sld03v2.viam.cloud"  # the machine's remote address (Viam app: the machine's CONNECT tab); armfarm14-main.310sld03v2.viam.cloud for the 850
+credentials = "apikey.json"   # {"api_key": "...", "api_key_id": "..."} from the CONNECT tab's API keys, kept out of git
 arm = "arm"
 camera = "cam"
-gripper = ""                 # no gripper mounted (2026-10-29); touch-off and relocation are off
+gripper = "gripper"          # the gripper component's name in the machine config ("" with none mounted: touch-off is then off; armfarm14 has none)
 motion = "builtin"
 # Our calibrated camera mount; the camera frame in the Viam app is then only for its 3D scene.
-camera_mount_file = "calibration/armfarm14_camera_mount.json"
-touch_off_file = "calibration/armfarm14_touch_off.json"
+camera_mount_file = "calibration/armfarm12_camera_mount.json"  # armfarm14_camera_mount.json for the 850
+touch_off_file = "calibration/armfarm12_touch_off.json"  # written by scan.py touch-off; armfarm14_touch_off.json for the 850
+# Home position: found and saved automatically when the survey finds the ChArUco mat (delete the
+# file to find it again); the first run starts from wherever the arm is.
+home_file = "calibration/armfarm12_home.json"
+# Our collision box around the camera body: a D435 (90 x 25 x 25mm) plus 5mm all round. The
+# default's 20mm margin overlapped the wrist on this arm, where the camera sits close to it, so
+# Viam saw a self-collision at some wrist angles (2026-11-05). armfarm14 used [130, 45, 45].
+camera_body_mm = [100.0, 35.0, 35.0]
 
 [workspace]
 # Ignore everything within 100mm of the arm's base (measured from its center); was 350mm, to skip the
 # cables around the base, but that hid objects placed closer in. Cables found now can be skipped when asked.
 min_base_distance = 100
-# Table region searched for objects, clear of the walls (front x=800, side y=425).
-x_range = [-350, 700]
-y_range = [-650, 350]
-# The survey looks straight down from a grid over this region (600mm up, 340mm apart),
-# visiting every reachable point. To use fixed positions instead: survey_positions = [[x, y, z], ...]
+# The survey finds the table from where the camera is and follows it outward (500mm up, 280mm
+# apart), so the table area isn't typed in; Viam's obstacles keep the arm off the walls. To search
+# only part of the table, set x_range = [x0, x1] and y_range = [y0, y1]. Fixed survey positions
+# instead: survey_positions = [[x, y, z], ...]
 
 [views]
 standoff = 320               # camera to the nearest point of the object's bounding sphere (the D435's ideal minimum is 0.3m; scans before 2026-11-03 used 280)
-elevations_deg = [10, 15, 25, 50, 72]   # the 10deg ring asks first (confirm_below_deg)
+elevations_deg = [10, 15, 25, 50, 72]
 azimuth_step_deg = 30
 min_coverage = 0.85          # below this, the object is moved to a scan station
 min_camera_height = 60       # no view puts the camera lower than this above the table (mm)
@@ -53,5 +59,5 @@ device = "auto"              # CUDA when available
 # The live viewer (http://localhost:8765 during every arm run; see README 5.12).
 enabled = true
 port = 8765
-monitor_camera = "webcam"    # a Viam camera component watching the whole cell ("" for none)
+monitor_camera = ""          # a Viam camera component watching the whole cell ("" for none; "webcam" on armfarm14)
 monitor_fps = 24             # its live stream's frame rate (it shares the cloud connection with the scan)
