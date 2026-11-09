@@ -63,9 +63,8 @@
   <text x="900" y="326" class="desc">(Viam's motion service), against the</text>
   <text x="900" y="345" class="desc">table slab, the clutter and the camera</text>
   <text x="900" y="378" class="bold">Low views</text>
-  <text x="900" y="398" class="desc">the 10° and 15° rings see under rounded</text>
-  <text x="900" y="417" class="desc">objects; the scan waits for you once</text>
-  <text x="900" y="436" class="desc">before the first view below 12°</text>
+  <text x="900" y="398" class="desc">the 10° and 15° rings see the surface</text>
+  <text x="900" y="417" class="desc">under rounded objects' widest point</text>
   <text x="900" y="469" class="bold">Coverage</text>
   <text x="900" y="489" class="desc">scored over about 350 surface directions,</text>
   <text x="900" y="508" class="desc">leaving out the bottom</text>

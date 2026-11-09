@@ -131,6 +131,9 @@ def final_roughness(mesh: o3d.geometry.TriangleMesh, measured: np.ndarray) -> fl
     return roughness(samples[np.isfinite(gaps)])
 
 
+POINTS_VOXEL = 1.0  # each subset's cumulative point cloud is saved thinned to one point per 1mm cube
+
+
 def progression(views: list[View], obj: DetectedObject, plane: TablePlane, config: Config, folder: Path,
                 counts: list[int] | None = None, order: str = "spread", refine: bool | None = None,
                 truth: o3d.geometry.TriangleMesh | None = None, min_views: int | None = None) -> list[dict]:
@@ -148,9 +151,16 @@ def progression(views: list[View], obj: DetectedObject, plane: TablePlane, confi
     reference_samples = (np.asarray(full.observed.sample_points_uniformly(20000).points)
                          if len(full.observed.triangles) else np.zeros((0, 3)))
 
+    # Each view's own points on the object (placed by its aligned pose), for the raw-points
+    # row and the cumulative point clouds in the progression figure.
+    view_points = []
+    for view, pose, table in zip(posed, poses, planes):
+        points, colors, _ = back_project(view, 2, config.camera.min_depth, config.camera.max_depth, pose,
+                                         edge_grow=config.reconstruct.edge_grow)
+        keep = object_mask(points, obj, table, config.reconstruct)
+        view_points.append((points[keep], colors[keep]))
     first = sequence[0]
-    raw, _, _ = back_project(posed[first], 2, config.camera.min_depth, config.camera.max_depth, poses[first], edge_grow=config.reconstruct.edge_grow)
-    raw = raw[object_mask(raw, obj, planes[first], config.reconstruct)]
+    raw = view_points[first][0]
     (folder / "views_01").mkdir(parents=True, exist_ok=True)
     o3d.io.write_point_cloud(str(folder / "views_01" / "raw_points.ply"), to_point_cloud(raw))
     # The patch every subset has seen: the final surface where the first view saw it.
@@ -164,6 +174,9 @@ def progression(views: list[View], obj: DetectedObject, plane: TablePlane, confi
         out = folder / f"views_{k:02d}"
         out.mkdir(parents=True, exist_ok=True)
         write_meshes(out, fused.mesh, fused.observed)
+        points = to_point_cloud(np.concatenate([view_points[i][0] for i in chosen]),
+                                np.concatenate([view_points[i][1] for i in chosen]))
+        o3d.io.write_point_cloud(str(out / "points.ply"), points.voxel_down_sample(POINTS_VOXEL))
         observed_points = np.asarray(fused.observed.vertices)
         row = {"views": k, "chosen": " ".join(posed[i].name.removeprefix("view_") for i in chosen)}
         row |= _score(observed_points, reference, truth, common)

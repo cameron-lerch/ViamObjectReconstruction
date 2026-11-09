@@ -4,6 +4,7 @@
     python scan.py --plan-only      # plan every object on the latest survey (no motion)
     python scan.py --max-views 16   # about half the time: 16 views per object, spread over all directions
     python scan.py --full-scan      # 50 frames per view, every raw frame saved (a dataset; about 2 min per view)
+    python scan.py --frames 20      # 20 frames per view (default 5; with --full-scan, instead of 50)
     python scan.py --full-scan --resume data/20261029-155544   # finish an interrupted scan (same options)
 
 The steps on their own, for troubleshooting (the arm only moves with --execute;
@@ -36,7 +37,7 @@ from scipy.spatial.transform import Rotation
 from recon import pipeline, synthetic
 from recon.config import Config, load_config
 from recon.measure import compare, identify, load_truth, measure
-from recon.figures import doubling_counts, facing_the_arm, progression_figure
+from recon.figures import facing_the_arm, progression_counts, progression_figure
 from recon.progression import progression, shape_error
 from recon.progression import table as progression_table
 from recon.reconstruct import object_mask, surface_distances
@@ -459,10 +460,11 @@ def run_progression(args, config: Config) -> None:
                            min_views=args.min_views)
         log.info("Object %d, 1 to %d views (%s order):\n%s\nMeshes and summary.csv in %s",
                  obj.id, len(views), args.order, progression_table(rows), folder)
-        counts = args.counts or doubling_counts(len(views))
+        shown = [c for c in (args.counts or progression_counts(len(views))) if c <= len(views) and str(c) in
+                 {str(r["views"]) for r in rows}]
         progression_figure(folder, session.object_dir(obj.id) / "progression.svg",
                            f"Object {obj.id}: reconstruction from 1 to {len(views)} views, seen from the arm's side",
-                           sorted(c for c in counts if c <= len(views)), azimuth=facing_the_arm(scanned.center))
+                           sorted(shown), azimuth=facing_the_arm(scanned.center))
 
 
 def run_demo(config: Config, with_progression: bool = False) -> None:
@@ -527,6 +529,9 @@ def main() -> None:
     parser.add_argument("--full-scan", action="store_true",
                         help="50 frames per scan view, and every raw frame saved (a dataset to subsample later; "
                              "about 2 minutes per view)")
+    parser.add_argument("--frames", type=int, metavar="N",
+                        help="frames per scan view (default: frames_per_view in config.toml, 5; with --full-scan, "
+                             "how many frames it captures and keeps instead of 50)")
     parser.add_argument("--max-views", type=int, help="scan: capture only N of each object's views, spread over all directions (16 measured every side of the test blocks)")
     parser.add_argument("--reuse-survey", action="store_true", help="scan: use the latest survey instead of surveying again")
     parser.add_argument("--objects", type=object_list, help="object ids from the survey, e.g. 0,2 (default: all)")
@@ -551,11 +556,16 @@ def main() -> None:
     for noisy in ("viam", "grpclib", "asyncio"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     config = load_config(args.config)
+    if args.frames is not None and args.frames < 1:
+        raise SystemExit("--frames needs at least 1")
     if args.full_scan:
-        config.capture.frames_per_view = config.capture.full_scan_frames
+        config.capture.frames_per_view = args.frames or config.capture.full_scan_frames
         config.capture.keep_frames = True
         log.info("Full scan: %d frames per view, every raw frame saved (about %.0f minutes per view)",
                  config.capture.frames_per_view, config.capture.frames_per_view * 2.6 / 60)
+    elif args.frames:
+        config.capture.frames_per_view = args.frames
+        log.info("%d frame(s) per view", args.frames)
 
     if args.command is None:
         execute = not args.plan_only

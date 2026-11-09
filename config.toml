@@ -3,7 +3,7 @@
 
 [machine]
 rig = "armfarm12-xarm6-realsense"  # saved with every session, to tell rigs apart in comparisons (armfarm14-realsense: the UFactory 850)
-address = "armfarm12-main.310sld03v2.viam.cloud"  # the machine's remote address (Viam app: the machine's CONNECT tab); armfarm14-main.310sld03v2.viam.cloud for the 850
+address = "armfarm14-main.310sld03v2.viam.cloud"  # the machine's remote address (Viam app: the machine's CONNECT tab); armfarm14-main.310sld03v2.viam.cloud for the 850
 credentials = "apikey.json"   # {"api_key": "...", "api_key_id": "..."} from the CONNECT tab's API keys, kept out of git
 arm = "arm"
 camera = "cam"

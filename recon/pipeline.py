@@ -15,7 +15,7 @@ from scipy.spatial.transform import Rotation
 from .board import BoardSpec, depth_model, detect, hand_eye, locate_flat
 from .calibrate import MountCalibration, apply_mount, calibrate_mount
 from .config import Config
-from .figures import doubling_counts, facing_the_arm, progression_figure
+from .figures import doubling_counts, facing_the_arm, progression_counts, progression_figure
 from .planner import ScanPlan, plan_scan, spread_views
 from .progression import progression
 from .reconstruct import reconstruct, save_reconstruction
@@ -636,12 +636,12 @@ def progression_snapshot(session: Session, object_id: int, plane: TablePlane, co
     obj = scanned_object(session, object_id)
     views = apply_session_calibration(session, load_views(session.views_dir(object_id)))
     folder = session.recon_dir(object_id) / "progression"
-    counts = doubling_counts(len(views))
+    counts = sorted(set(doubling_counts(len(views))) | set(progression_counts(len(views))))
     progression(views, obj, plane, config, folder, counts, refine=refine)
     svg = session.object_dir(object_id) / "progression.svg"
     named = f" ({obj.color_name})" if obj.color_name else ""
     progression_figure(folder, svg, f"Object {object_id}{named}: reconstruction from 1 to {len(views)} views, seen from the arm's side",
-                       counts, azimuth=facing_the_arm(obj.center))
+                       progression_counts(len(views)), azimuth=facing_the_arm(obj.center))
     log.info("  progression figure: %s", svg.with_suffix(".png") if svg.with_suffix(".png").exists() else svg)
     return svg
 
