@@ -75,7 +75,7 @@ def test_rebuilds_variants_of_a_saved_scan_and_writes_results(tmp_path):
     assert abs(rows[0]["diameter_error_mm"]) < 3 and rows[0]["mean_size_error_pct"] < 6
     for name in ("results.csv", "results.json", "summary.md", "figure.svg"):
         assert (out / name).exists()
-    assert (out / "frames_1" / "mesh.ply").exists() or (out / "frames=1" / "mesh.ply").exists()
+    assert (out / "frames_1" / "watertight_mesh.ply").exists() or (out / "frames=1" / "watertight_mesh.ply").exists()
     assert len(json.loads((out / "results.json").read_text())) == 3
 
 

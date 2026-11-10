@@ -5,7 +5,7 @@ data/<session>/
     survey/view_000/        overhead views used to find the objects
     object_00/plan.json     reachable views, coverage, relocation decision
     object_00/views/...     the captured views of this object
-    object_00/recon/        mesh.ply, mesh.obj, cloud.ply, report.json
+    object_00/recon/        watertight_mesh.*, open_mesh.*, cloud.ply, report.json
 '''
 
 import json

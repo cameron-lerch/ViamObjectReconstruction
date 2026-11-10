@@ -22,35 +22,35 @@
   <text x="175" y="524.6" class="small">aim point: 40% up</text>
   <path d="M300.0,216.4 A303.2,303.2 0 0 1 603.2,519.6" class="arc"/>
   <line x1="30" y1="489.0" x2="820" y2="489.0" class="floor"/>
-  <text x="40" y="481.0" class="warn">no camera below 60mm (min_camera_height)</text>
+  <text x="40" y="481.0" class="warn">minimum camera height</text>
   <line x1="300.0" y1="216.4" x2="300.0" y2="519.6" class="ray"/>
   <circle cx="300.0" cy="216.4" r="9" fill="#1F4E79"/>
-  <text x="284.0" y="212.4" text-anchor="end" class="bold">Top view</text>
-  <text x="284.0" y="228.4" text-anchor="end" class="small">1 view, camera 381mm up</text>
+  <text x="236.0" y="212.4" text-anchor="end" class="bold">Top view</text>
+  <text x="243.0" y="212.4" text-anchor="start" class="small">1 view</text>
   <line x1="393.7" y1="231.2" x2="300.0" y2="519.6" class="ray"/>
   <circle cx="393.7" cy="231.2" r="9" fill="#1F4E79"/>
   <text x="409.7" y="225.2" text-anchor="start" class="bold">72° ring</text>
-  <text x="409.7" y="241.2" text-anchor="start" class="small">12 views, camera 363mm up</text>
+  <text x="471.7" y="225.2" text-anchor="start" class="small">12 views</text>
   <line x1="494.9" y1="287.3" x2="300.0" y2="519.6" class="ray"/>
   <circle cx="494.9" cy="287.3" r="9" fill="#1F4E79"/>
   <text x="510.9" y="283.3" text-anchor="start" class="bold">50° ring</text>
-  <text x="510.9" y="299.3" text-anchor="start" class="small">12 views, camera 297mm up</text>
+  <text x="572.9" y="283.3" text-anchor="start" class="small">12 views</text>
   <line x1="574.8" y1="391.4" x2="300.0" y2="519.6" class="ray"/>
   <circle cx="574.8" cy="391.4" r="9" fill="#1F4E79"/>
   <text x="590.8" y="387.4" text-anchor="start" class="bold">25° ring</text>
-  <text x="590.8" y="403.4" text-anchor="start" class="small">12 views, camera 175mm up</text>
+  <text x="652.8" y="387.4" text-anchor="start" class="small">12 views</text>
   <line x1="592.9" y1="441.1" x2="300.0" y2="519.6" class="ray"/>
   <circle cx="592.9" cy="441.1" r="9" fill="#1F4E79"/>
   <text x="608.9" y="427.1" text-anchor="start" class="bold">15° ring</text>
-  <text x="608.9" y="443.1" text-anchor="start" class="small">12 views, camera 116mm up</text>
+  <text x="670.9" y="427.1" text-anchor="start" class="small">12 views</text>
   <line x1="598.6" y1="466.9" x2="300.0" y2="519.6" class="ray"/>
   <circle cx="598.6" cy="466.9" r="9" fill="#1F4E79"/>
   <text x="614.6" y="480.9" text-anchor="start" class="bold">10° ring</text>
-  <text x="614.6" y="496.9" text-anchor="start" class="small">12 views, camera 86mm up</text>
+  <text x="676.6" y="480.9" text-anchor="start" class="small">12 views</text>
   <line x1="300.0" y1="519.6" x2="442.4" y2="251.9" class="dim"/>
   <text x="352.3" y="342.3" text-anchor="end" class="bold">320mm + the object's radius</text>
   <text x="352.3" y="359.3" text-anchor="end" class="small">(357mm for this 30 × 30 × 60mm block)</text>
-  <rect x="880" y="82" width="335" height="470" rx="12" fill="#F0F4F8" stroke="#BCCCDC" stroke-width="1.5"/>
+  <rect x="880" y="82" width="335" height="526" rx="12" fill="#F0F4F8" stroke="#BCCCDC" stroke-width="1.5"/>
   <text x="900" y="124" class="bold">61 candidates</text>
   <text x="900" y="144" class="desc">a top view and 5 rings of 12, every 30°;</text>
   <text x="900" y="163" class="desc">alternate rings are turned by 15°</text>
@@ -59,13 +59,18 @@
   <text x="900" y="235" class="desc">bounding sphere, so the nearest surface</text>
   <text x="900" y="254" class="desc">stays beyond the D435's 0.3m minimum</text>
   <text x="900" y="287" class="bold">Checked before moving</text>
-  <text x="900" y="307" class="desc">each pose is planned without moving</text>
-  <text x="900" y="326" class="desc">(Viam's motion service), against the</text>
-  <text x="900" y="345" class="desc">table slab, the clutter and the camera</text>
-  <text x="900" y="378" class="bold">Low views</text>
-  <text x="900" y="398" class="desc">the 10° and 15° rings see the surface</text>
-  <text x="900" y="417" class="desc">under rounded objects' widest point</text>
-  <text x="900" y="469" class="bold">Coverage</text>
-  <text x="900" y="489" class="desc">scored over about 350 surface directions,</text>
-  <text x="900" y="508" class="desc">leaving out the bottom</text>
+  <text x="900" y="307" class="desc">each pose is planned before moving, with a</text>
+  <text x="900" y="326" class="desc">plan-only request to the Viam motion</text>
+  <text x="900" y="345" class="desc">service (motion.do_command({&quot;plan&quot;: …})),</text>
+  <text x="900" y="364" class="desc">to find the reachable, collision-free</text>
+  <text x="900" y="383" class="desc">views around an object</text>
+  <text x="900" y="416" class="bold">Low views</text>
+  <text x="900" y="436" class="desc">low viewpoints help capture details that</text>
+  <text x="900" y="455" class="desc">might be hidden by the curvature of an</text>
+  <text x="900" y="474" class="desc">object</text>
+  <text x="900" y="507" class="bold">Coverage</text>
+  <text x="900" y="527" class="desc">the share of the object's surface</text>
+  <text x="900" y="546" class="desc">directions that at least one reachable</text>
+  <text x="900" y="565" class="desc">view faces (within 55°); the bottom,</text>
+  <text x="900" y="584" class="desc">which rests on the table, isn't counted</text>
 </svg>

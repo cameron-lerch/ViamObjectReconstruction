@@ -73,7 +73,7 @@
 <main>
   <section>
     <h2>Mesh <span class="info" id="meshInfo"></span>
-      <span class="toggle"><button id="meshGray" class="on">gray</button><button id="meshColor">color</button><span class="gap"></span><button id="meshFinal">final mesh</button><button id="meshPlay">playback</button></span></h2>
+      <span class="toggle"><button id="meshGray" class="on">gray</button><button id="meshColor">color</button><span class="gap"></span><button id="meshFinal">watertight mesh</button><button id="meshPlay">playback</button></span></h2>
     <div class="view" id="meshView">
       <div class="empty" id="meshEmpty"><img src="viam_logo.svg" alt="Viam"><div id="meshEmptyText">The mesh appears after the first scan view.</div></div>
       <div class="player" id="meshPlayer" hidden><button data-step="-1">◀</button><button data-play>▶</button><button data-step="1">▶▶</button><span></span></div>
@@ -120,14 +120,14 @@ import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
 const $ = (id) => document.getElementById(id);
 const loader = new PLYLoader();
 const STEP_SECONDS = 0.5;  // playback: each view shown this long, looping back to the first
-const README_SECTION = "Section 5.12 of the README";
+const README_SECTION = "section 9.5 of the README";
 const AXES = [["X", "#D64545", [1, 0, 0]], ["Y", "#2E9E5B", [0, 1, 0]], ["Z", "#2F6FB0", [0, 0, 1]]];
 const CAMERA_COLOR = 0xE8871E;
 const step3 = (n) => String(n).padStart(3, "0");
 
 const HINTS = {
-  mesh: "Left click to rotate, Right click to pan.",
-  final: "The final, closed mesh. Left click to rotate, Right click to pan.",
+  mesh: "The open mesh, fused from the views so far. Left click to rotate, Right click to pan.",
+  final: "The watertight mesh: the measured surface, closed with a flat bottom and filled-in walls. Left click to rotate, Right click to pan.",
   pointsLatest: "The latest view's point cloud. Points are colored based upon their corresponding pixel's RGB value.",
   pointsAll: "Combination of all point cloud data collected so far. Data points are thinned for clarity.",
   color: "Latest capture from the RGB-D camera.",
@@ -289,12 +289,12 @@ async function refreshMesh() {
   let url, info = "";
   if (panel.final) {
     if (!last.final) {
-      $("meshEmptyText").textContent = `Final mesh available after the scan is completed. For details about the differences between the live mesh and the final mesh, see ${README_SECTION}.`;
+      $("meshEmptyText").textContent = `The watertight mesh is available once the scan is complete. For how it differs from the live open mesh, see ${README_SECTION}.`;
       $("meshEmpty").hidden = false;
       return;
     }
     url = `/files/final_mesh.ply?v=${last.versions.final}`;
-    info = `final mesh, ${(last.final_triangles || 0).toLocaleString()} triangles`;
+    info = `watertight mesh, ${(last.final_triangles || 0).toLocaleString()} triangles`;
   } else {
     const step = shownStep(panel);
     if (!step) {
@@ -498,7 +498,7 @@ for (const [id, mode] of Object.entries(CAMERA_BUTTONS)) {
 // ---------- status ----------
 
 function render(status) {
-  const labels = { complete: "scan complete", replay: "saved scan", computing: "computing final mesh" };
+  const labels = { complete: "scan complete", replay: "saved scan", computing: "computing the watertight mesh" };
   const state = status.paused && status.state !== "paused" ? "pausing" : status.stopping && !["stopped", "complete"].includes(status.state) ? "stopping" : status.state;
   $("state").textContent = labels[state] || state;
   $("state").className = status.state;

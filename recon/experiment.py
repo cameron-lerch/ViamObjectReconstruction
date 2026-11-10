@@ -31,7 +31,7 @@ from .config import Config
 from .measure import compare, identify, measure
 from .pipeline import apply_session_calibration, scanned_object
 from .progression import final_roughness, measured_share, roughness, spread_order
-from .reconstruct import reconstruct
+from .reconstruct import OPEN_MESH, WATERTIGHT_MESH, reconstruct
 from .rgbd import load_views
 from .scene import DetectedObject, TablePlane
 from .session import Session
@@ -127,14 +127,14 @@ def evaluate(result, truth_name: str | None, truth: dict, root: Path) -> tuple[d
         "alignment_rejected": sum(v["rejected"] for v in registration),
         "roughness_mm": roughness(np.asarray(observed.vertices)) if len(observed.vertices) else None,
         # The same measure on the final, closed mesh (only where it lies on measured data).
-        "roughness_final_mm": (final_roughness(mesh, np.asarray(result.cloud.points))
-                               if report["mesh"]["closed"] and len(result.cloud.points) else None),
+        "roughness_final_mm": (final_roughness(mesh, np.asarray(observed.vertices))
+                               if report["mesh"]["closed"] and len(observed.vertices) else None),
         "observed_triangles": len(observed.triangles),
         "closed": bool(report["mesh"]["closed"]),
         "volume_cm3": report["mesh"]["volume_mm3"] / 1000 if report["mesh"]["volume_mm3"] else None,
         # Of a closed mesh only: an open (observed) mesh is all measured by definition.
-        "measured_share": (measured_share(mesh, np.asarray(result.cloud.points))
-                           if report["mesh"]["closed"] and len(result.cloud.points) else None),
+        "measured_share": (measured_share(mesh, np.asarray(observed.vertices))
+                           if report["mesh"]["closed"] and len(observed.vertices) else None),
     }
     obj = report["object"]
     table_z = obj["center"][2] - obj["size"][2] / 2
@@ -202,8 +202,8 @@ def run(variants: list[Variant], config: Config, out: Path, truth: dict, truth_n
         rows.append(row)
         folder = out / safe_name(variant.label)
         folder.mkdir(parents=True, exist_ok=True)
-        o3d.io.write_triangle_mesh(str(folder / "mesh.ply"), result.mesh, write_ascii=False)
-        o3d.io.write_triangle_mesh(str(folder / "observed.ply"), result.observed, write_ascii=False)
+        o3d.io.write_triangle_mesh(str(folder / f"{WATERTIGHT_MESH}.ply"), result.mesh, write_ascii=False)
+        o3d.io.write_triangle_mesh(str(folder / f"{OPEN_MESH}.ply"), result.observed, write_ascii=False)
         (folder / "report.json").write_text(json.dumps(result.report, indent=2))
         renders.append((variant.label, result.mesh, result.observed, errors))
         log.info("  %s", ", ".join(f"{k} {v:.3g}" if isinstance(v, float) else f"{k} {v}"
@@ -215,7 +215,7 @@ def run(variants: list[Variant], config: Config, out: Path, truth: dict, truth_n
 
 def saved_truth(variant: Variant, truth: dict) -> str | None:
     ''' The ground-truth entry the session's own final mesh resembles, if it has one. '''
-    path = Session(Path(variant.session)).recon_dir(variant.object_id) / "mesh.ply"
+    path = Session(Path(variant.session)).recon_dir(variant.object_id) / f"{WATERTIGHT_MESH}.ply"
     if not path.exists():
         return None
     mesh = o3d.io.read_triangle_mesh(str(path))

@@ -40,7 +40,7 @@ from recon.measure import compare, identify, load_truth, measure
 from recon.figures import facing_the_arm, progression_counts, progression_figure
 from recon.progression import progression, shape_error
 from recon.progression import table as progression_table
-from recon.reconstruct import object_mask, surface_distances
+from recon.reconstruct import WATERTIGHT_MESH, object_mask, surface_distances
 from recon.rgbd import back_project, load_views, save_view
 from recon.live import Live
 from recon.robot import MoveDeclined, PoseMismatch, Robot, RobotUnresponsive, ask_operator, connect
@@ -240,7 +240,7 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
         for obj in selected(objects, args.objects):
             if session.views_dir(obj.id).exists():
                 if robot.live:
-                    robot.live.message(f"Building object {obj.id}'s final mesh", "computing")
+                    robot.live.message(f"Building object {obj.id}'s meshes", "computing")
                 await asyncio.to_thread(pipeline.finish_object, session, obj.id, plane, config)
     if args.command == "scan" and not args.execute:
         log.info("Planning only. Add --execute to move the arm (and --step to confirm each object).")
@@ -352,19 +352,20 @@ async def scan_everything(robot: Robot, config: Config, execute: bool, max_views
     for obj in scanned:
         log.info("\nBuilding object %d's meshes and figures", obj.id)
         if live:
-            live.message(f"Building object {obj.id}'s final mesh", "computing")
+            live.message(f"Building object {obj.id}'s meshes", "computing")
         await asyncio.to_thread(pipeline.finish_object, session, obj.id, plane, config)
         compare_object(session, obj, truth, truth_file)
         if live:
-            live.show_final(session.recon_dir(obj.id) / "mesh.ply")
-    log.info("\nDone: %d object(s) scanned. Results in %s/object_NN/ (recon/mesh.obj, recon/observed.obj, progression.png)",
+            live.show_final(session.recon_dir(obj.id) / f"{WATERTIGHT_MESH}.ply")
+    log.info("\nDone: %d object(s) scanned. Results in %s/object_NN/ (recon/watertight_mesh.obj, recon/open_mesh.obj, "
+             "progression.png, progression_vid.mp4)",
              len(scanned), session.root)
     if live and scanned:
         # The viewer stays open, with the final mesh, until this last prompt is answered.
         views = sum(len(pipeline.captured_views(session, obj.id)) for obj in scanned)
-        live.complete(f"{views} views, final mesh ready")
+        live.complete(f"{views} views, watertight mesh ready")
         await asyncio.to_thread(ask_operator, f"\nScan completed {views} views with {config.capture.frames_per_view} frames per view. "
-                                       f"\nData saved and final mesh generated in {session.root} "
+                                       f"\nData saved and meshes generated in {session.root} "
                                        "\n Press ENTER to end the program and close the webapp.")
 
 
@@ -416,9 +417,9 @@ def compare_object(session: Session, obj, truth: dict, truth_file: str, name: st
     ''' Measure an object's mesh like calipers would and compare it with the ground-truth
     entry it resembles (or `name`). Returns the errors, or None if nothing to compare. '''
     folder = session.recon_dir(obj.id)
-    if not (folder / "mesh.ply").exists():
+    if not (folder / f"{WATERTIGHT_MESH}.ply").exists():
         return None
-    mesh = o3d.io.read_triangle_mesh(str(folder / "mesh.ply"))
+    mesh = o3d.io.read_triangle_mesh(str(folder / f"{WATERTIGHT_MESH}.ply"))
     if name is None:
         name, _, why = identify(mesh, truth)
         if name is None:
@@ -465,6 +466,10 @@ def run_progression(args, config: Config) -> None:
         progression_figure(folder, session.object_dir(obj.id) / "progression.svg",
                            f"Object {obj.id}: reconstruction from 1 to {len(views)} views, seen from the arm's side",
                            sorted(shown), azimuth=facing_the_arm(scanned.center))
+        try:  # from the saved mesh's aligned poses: needs scan.py reconstruct to have run
+            pipeline.progression_video_snapshot(session, obj.id, plane, config)
+        except (OSError, RuntimeError) as error:
+            log.warning("No progression video for object %d: %s", obj.id, error)
 
 
 def run_demo(config: Config, with_progression: bool = False) -> None:

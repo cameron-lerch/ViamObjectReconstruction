@@ -505,9 +505,15 @@ def reconstruct(views: list[View], obj: DetectedObject, plane: TablePlane, confi
     return Reconstruction(fused.mesh, fused.observed, fused.cloud, poses, report)
 
 
+# Every reconstruction writes both meshes, as .ply (with vertex colors) and .obj: the open
+# mesh (only the surface at least 2 views measured, open where nothing was seen) and the
+# watertight mesh (the open mesh's surface closed with a flat bottom and filled-in walls).
+OPEN_MESH, WATERTIGHT_MESH = "open_mesh", "watertight_mesh"
+
+
 def write_meshes(folder: Path, mesh: o3d.geometry.TriangleMesh, observed: o3d.geometry.TriangleMesh) -> None:
     with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Error):  # OBJ drops normals; fine
-        for name, item in (("mesh", mesh), ("observed", observed)):
+        for name, item in ((WATERTIGHT_MESH, mesh), (OPEN_MESH, observed)):
             o3d.io.write_triangle_mesh(str(folder / f"{name}.ply"), item)
             o3d.io.write_triangle_mesh(str(folder / f"{name}.obj"), item)
 

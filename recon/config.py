@@ -300,8 +300,8 @@ class ReconstructConfig:
     # "two_step" (smooths the normals, then fits the vertices to them; it made every object
     # 1-3mm taller, so it adds features). Or "none".
     smoothing: str = "hc_laplacian"
-    # What gets smoothed: "both" (the measured surface, observed.obj, and the final closed
-    # mesh, mesh.obj, which is built from the fused points), "observed" or "final".
+    # What gets smoothed: "both" (the measured surface, open_mesh.obj, and the watertight
+    # mesh, watertight_mesh.obj, which is built from the fused points), "observed" or "final".
     smooth_target: str = "both"
     # How the final mesh is closed. "flat_bottom": objects rest flat on the table, so the
     # bottom is filled flat and walls never seen drop from the lowest surface seen

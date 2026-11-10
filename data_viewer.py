@@ -16,6 +16,7 @@ import logging
 import sys
 from pathlib import Path
 
+from recon.reconstruct import WATERTIGHT_MESH
 from recon.config import load_config
 from recon.live import Live
 from recon.pipeline import scanned_object
@@ -66,10 +67,10 @@ def main() -> None:
     for index, folder in enumerate(folders):
         live.captured(folder, plane)
         live.view_captured(folder, index)
-    final = session.recon_dir(object_id) / "mesh.ply"
+    final = session.recon_dir(object_id) / f"{WATERTIGHT_MESH}.ply"
     if final.exists():
         live.show_final(final)
-    live.message("a saved scan" + ("" if final.exists() else "; no final mesh was built for it"))
+    live.message("a saved scan" + ("" if final.exists() else "; no watertight mesh was built for it"))
     live.tick(args.seconds)
     try:
         input("Preparing every view in the background; the page steps through them as they're ready.\n"

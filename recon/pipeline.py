@@ -15,10 +15,10 @@ from scipy.spatial.transform import Rotation
 from .board import BoardSpec, depth_model, detect, hand_eye, locate_flat
 from .calibrate import MountCalibration, apply_mount, calibrate_mount
 from .config import Config
-from .figures import doubling_counts, facing_the_arm, progression_counts, progression_figure
+from .figures import doubling_counts, facing_the_arm, progression_counts, progression_figure, progression_video
 from .planner import ScanPlan, plan_scan, spread_views
 from .progression import progression
-from .reconstruct import reconstruct, save_reconstruction
+from .reconstruct import local_table_plane, reconstruct, save_reconstruction, views_seeing
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
 from .rgbd import back_project, load_view, load_views, save_frames, save_view
 from .robot import MissedTarget, MoveDeclined, Robot, RobotUnresponsive, ask_operator
@@ -646,14 +646,38 @@ def progression_snapshot(session: Session, object_id: int, plane: TablePlane, co
     return svg
 
 
+def progression_video_snapshot(session: Session, object_id: int, plane: TablePlane, config: Config) -> Path:
+    ''' The scan building up, view by view, saved with the object's results as
+    object_NN/progression_vid.mp4 (and .gif), from the final reconstruction's aligned poses. '''
+    folder = session.recon_dir(object_id)
+    report = json.loads((folder / "report.json").read_text())
+    poses = [np.array(pose) for pose in json.loads((folder / "refined_poses.json").read_text())]
+    # The views the reconstruction used, in the same order as its poses.
+    views = views_seeing(apply_session_calibration(session, load_views(session.views_dir(object_id))),
+                         scanned_object(session, object_id), config)
+    if len(views) != len(poses):
+        raise RuntimeError(f"{len(views)} views but {len(poses)} saved poses; rebuild the mesh first (scan.py reconstruct)")
+    obj = DetectedObject.from_dict(report["object"])
+    planes = [local_table_plane(view, pose, obj, plane, config) for view, pose in zip(views, poses)]
+    named = f" ({obj.color_name})" if obj.color_name else ""
+    path = progression_video(views, poses, planes, obj, config, session.object_dir(object_id) / "progression_vid.mp4",
+                             f"Object {object_id}{named}: the scan, view by view", azimuth=facing_the_arm(obj.center))
+    log.info("  progression video: %s", path)
+    return path
+
+
 def finish_object(session: Session, object_id: int, plane: TablePlane, config: Config, refine: bool | None = None) -> None:
     ''' Everything offline after an object's views are captured: its mesh, then the
-    progression figure. '''
+    progression figure and video. '''
     reconstruct_object(session, object_id, plane, config, refine)
     try:  # a figure for people: it must never stop the run
         progression_snapshot(session, object_id, plane, config, refine)
     except Exception as error:
         log.warning("  couldn't make the progression figure: %s", error)
+    try:
+        progression_video_snapshot(session, object_id, plane, config)
+    except Exception as error:
+        log.warning("  couldn't make the progression video: %s", error)
 
 
 async def search_for_board(robot: Robot, session: Session, config: Config, spec: BoardSpec,

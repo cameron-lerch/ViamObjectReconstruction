@@ -104,7 +104,7 @@ def test_progression_improves_with_more_views(tmp_path):
     # Smoothing the final mesh (HC Laplacian) shrinks it slightly: 3.3% of the volume here.
     assert everything["volume_cm3"] == pytest.approx(np.pi * 2.5**2 * 9.0, rel=0.05)
     for k in (1, 3, len(views)):
-        assert (tmp_path / f"views_{k:02d}" / "mesh.obj").exists()
-        assert (tmp_path / f"views_{k:02d}" / "observed.obj").exists()
+        assert (tmp_path / f"views_{k:02d}" / "watertight_mesh.obj").exists()
+        assert (tmp_path / f"views_{k:02d}" / "open_mesh.obj").exists()
     assert (tmp_path / "views_01" / "raw_points.ply").exists()
     assert (tmp_path / "summary.csv").read_text().startswith("views,")

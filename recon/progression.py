@@ -114,8 +114,8 @@ def _score(points: np.ndarray, reference: o3d.geometry.TriangleMesh, truth: o3d.
 
 
 def measured_share(mesh: o3d.geometry.TriangleMesh, measured: np.ndarray) -> float:
-    ''' Share of a closed mesh's surface lying on measured data; the rest is the
-    flat-bottom and straight-wall fill. '''
+    ''' Share of a closed mesh's surface lying on measured data (within 2mm of the open mesh,
+    as the figures color it); the rest is the flat-bottom and straight-wall fill. '''
     samples = np.asarray(mesh.sample_points_uniformly(20000).points)
     gaps, _ = cKDTree(measured).query(samples, distance_upper_bound=COMPLETENESS_TOLERANCE)
     return float(np.isfinite(gaps).mean())
@@ -184,8 +184,8 @@ def progression(views: list[View], obj: DetectedObject, plane: TablePlane, confi
         row["observed_triangles"] = summary["observed_triangles"]
         row["closed_triangles"] = summary["triangles"]
         row["volume_cm3"] = summary["volume_mm3"] / 1000 if summary["volume_mm3"] else None
-        if len(fused.mesh.triangles) and len(fused.cloud.points):
-            row["measured_share"] = measured_share(fused.mesh, np.asarray(fused.cloud.points))
+        if len(fused.mesh.triangles) and len(fused.observed.vertices):
+            row["measured_share"] = measured_share(fused.mesh, np.asarray(fused.observed.vertices))
         if len(reference_samples) and len(fused.observed.triangles):
             row["completeness"] = float((surface_distances(fused.observed, reference_samples) < COMPLETENESS_TOLERANCE).mean())
         if truth is not None and len(fused.mesh.triangles):
