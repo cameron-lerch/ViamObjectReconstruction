@@ -316,6 +316,9 @@ class ReconstructConfig:
     poisson_depth: int = 9
     poisson_scale: float = 3.0
     footprint_shrink: float = 1.0
+    # Leave a hole in the outline open (no bottom across it) when some view saw the table
+    # through it: the middle of a roll of tape, gaps in a coiled cable. Off: every hole is filled.
+    see_through_holes: bool = True
     # Wall-meets-table pixels flare outward; this lowest band of observed surface (mm)
     # is replaced by the straight-wall prior.
     base_band: float = 5.0

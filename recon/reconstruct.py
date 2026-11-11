@@ -26,7 +26,7 @@ import open3d as o3d
 from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
-from .bottom import boundary_edge_count, close_with_flat_bottom, enclosed_volume
+from .bottom import boundary_edge_count, close_with_flat_bottom, enclosed_volume, table_seen
 from .config import Config, ReconstructConfig
 from .rgbd import OUTLIER_NEIGHBORS, OUTLIER_STD, View, back_project, incidence_deg, to_point_cloud
 from .scene import TOP_PERCENTILE, DetectedObject, TablePlane, min_area_rectangle
@@ -410,9 +410,11 @@ def build_mesh(views: list[View], poses: list[np.ndarray], planes: list[TablePla
     cloud = grid.extract_point_cloud(weight).to_legacy()
     table = combined_plane(planes, obj.center)
     if settings.closing in ("flat_bottom", "poisson"):
+        seen = (table_seen(views, poses, table, obj.center, obj.footprint_radius + 10.0)
+                if settings.see_through_holes and settings.closing == "flat_bottom" else None)
         mesh = close_with_flat_bottom(cloud, table, settings.poisson_depth, settings.poisson_scale,
                                       settings.footprint_shrink, settings.base_band,
-                                      priors=settings.closing == "flat_bottom")
+                                      priors=settings.closing == "flat_bottom", seen_table=seen)
     elif settings.closing == "none":
         mesh = observed
     else:

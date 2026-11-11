@@ -16,6 +16,10 @@ rest flat on the table, which gives two priors:
 Screened Poisson reconstruction fits one closed surface through the observed
 points (with their normals) plus these prior points, and anything that ends up
 below the table is flattened onto it.
+
+Holes are filled only where nothing was seen through them: where some view's depth
+landed on the table inside the outline (the middle of a roll of tape, gaps in a
+coiled cable), the outline keeps the hole, so it gets walls and no bottom.
 '''
 
 import logging
@@ -49,6 +53,11 @@ SCRAP_MARGIN = 3.0
 # A closed mesh reaching further than this (mm) past the points it was fit to has
 # ballooned (Poisson does on thin slivers, such as 2 views of a pumpkin's top).
 BALLOON_MARGIN = 20.0
+# Seeing the table through a hole (judgment, from the 2026-11-11 tape roll): depth pixels
+# within this distance (mm) of the table count as table, and a hole in the outline stays
+# open when the table was seen in at least this many of its cells.
+SEEN_TABLE_BAND = 2.0
+MIN_SEEN_CELLS = 5
 
 
 def _table_axes(table: TablePlane) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -59,10 +68,11 @@ def _table_axes(table: TablePlane) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return normal, u, np.cross(normal, u)
 
 
-def footprint(flat: np.ndarray, shrink: float) -> tuple[np.ndarray, np.ndarray]:
+def footprint(flat: np.ndarray, shrink: float, seen: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     ''' Outline seen from above, as a smoothed occupancy grid, and the grid's origin.
 
-    Edge noise pads the outline, so it is shrunk by `shrink` mm.
+    Edge noise pads the outline, so it is shrunk by `shrink` mm. Holes in it are filled,
+    except those where the table was `seen` (table points, in the same 2D coordinates).
     '''
     # A few cells of padding so closing and blurring never touch the grid's border.
     low = flat.min(axis=0) - 4 * GRID
@@ -70,7 +80,19 @@ def footprint(flat: np.ndarray, shrink: float) -> tuple[np.ndarray, np.ndarray]:
     grid = np.zeros(cells.max(axis=0) + 5, dtype=bool)
     grid[cells[:, 0], cells[:, 1]] = True
     grid = ndimage.binary_closing(grid, iterations=2)
-    grid = ndimage.binary_fill_holes(grid)
+    filled = ndimage.binary_fill_holes(grid)
+    if seen is not None and len(seen):
+        holes, count = ndimage.label(filled & ~grid)
+        at = np.floor((seen - low) / GRID).astype(int)
+        inside = np.all((at >= 0) & (at < grid.shape), axis=1)
+        table = np.zeros(grid.shape, dtype=bool)
+        table[at[inside, 0], at[inside, 1]] = True
+        hits = ndimage.sum(table, holes, index=np.arange(1, count + 1))
+        open_holes = np.flatnonzero(hits >= MIN_SEEN_CELLS) + 1
+        if len(open_holes):
+            log.info("  %d hole(s) left open: the table was seen through them", len(open_holes))
+        filled &= ~np.isin(holes, open_holes)
+    grid = filled
     grid = ndimage.binary_opening(grid)
     if shrink > 0:
         grid = ndimage.binary_erosion(grid, iterations=max(1, round(shrink / GRID)))
@@ -121,7 +143,8 @@ def lowest_seen(outline: np.ndarray, outward: np.ndarray, flat: np.ndarray, heig
 
 
 def prior_points(points: np.ndarray, table: TablePlane, shrink: float,
-                 normals: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+                 normals: np.ndarray | None = None,
+                 seen_table: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     ''' Flat-bottom points and (where unobserved) straight-wall points, with outward normals.
 
     With `normals`, each wall drops from the lowest place the surface was seen,
@@ -129,7 +152,8 @@ def prior_points(points: np.ndarray, table: TablePlane, shrink: float,
     '''
     normal, u, v = _table_axes(table)
     flat = np.stack([points @ u, points @ v], axis=1)
-    occupancy, low = footprint(flat, shrink)
+    seen = None if seen_table is None else np.stack([seen_table @ u, seen_table @ v], axis=1)
+    occupancy, low = footprint(flat, shrink, seen)
     on_plane = -table.offset * normal
 
     def to_3d(xy: np.ndarray, height: np.ndarray) -> np.ndarray:
@@ -214,6 +238,23 @@ def table_scraps(points: np.ndarray, table: TablePlane) -> np.ndarray:
     return scraps
 
 
+def table_seen(views, poses: list[np.ndarray], table: TablePlane, center: np.ndarray,
+               radius: float) -> np.ndarray:
+    ''' Points where some view's depth landed on the table, within `radius` mm of `center`
+    (across the table): what the cameras saw around and through the object. '''
+    found = []
+    for view, pose in zip(views, poses):
+        k = view.intrinsics
+        rows, cols = np.nonzero(view.depth)
+        z = view.depth[rows, cols].astype(float)
+        camera = np.stack([(cols - k.cx) * z / k.fx, (rows - k.cy) * z / k.fy, z], axis=1)
+        world = camera @ pose[:3, :3].T + pose[:3, 3]
+        near = (np.abs(table.height(world)) < SEEN_TABLE_BAND) & (
+            np.linalg.norm(world[:, :2] - center[:2], axis=1) < radius)
+        found.append(world[near])
+    return np.vstack(found) if found else np.zeros((0, 3))
+
+
 def boundary_edge_count(mesh: o3d.geometry.TriangleMesh) -> int:
     triangles = np.asarray(mesh.triangles)
     edges = np.sort(np.concatenate([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]]), axis=1)
@@ -230,13 +271,14 @@ def enclosed_volume(mesh: o3d.geometry.TriangleMesh) -> float:
 
 def close_with_flat_bottom(cloud: o3d.geometry.PointCloud, table: TablePlane, depth: int = 9,
                            scale: float = 3.0, shrink: float = 1.0, base_band: float = 5.0,
-                           priors: bool = True) -> o3d.geometry.TriangleMesh:
+                           priors: bool = True, seen_table: np.ndarray | None = None) -> o3d.geometry.TriangleMesh:
     ''' Closed mesh through the fused surface points, with a flat bottom on the table.
 
     `cloud` needs outward normals (the TSDF's point cloud has them). `scale` sizes
     Poisson's working box relative to the data; too tight a box leaves the surface
     open where it meets the box. The footprint comes from points above the base
-    band, so it is the object's outline rather than the flared base.
+    band, so it is the object's outline rather than the flared base. `seen_table`
+    (from `table_seen`) keeps holes the cameras saw the table through open.
     '''
     points, normals = np.asarray(cloud.points), np.asarray(cloud.normals)
     above = table.height(points) > 0
@@ -249,7 +291,7 @@ def close_with_flat_bottom(cloud: o3d.geometry.PointCloud, table: TablePlane, de
     # prior replaces the lowest `base_band` mm of observed surface.
     clear = table.height(points) > base_band
     if priors:
-        extra, extra_normals = prior_points(points[clear], table, shrink, normals[clear])
+        extra, extra_normals = prior_points(points[clear], table, shrink, normals[clear], seen_table)
     else:  # plain screened Poisson through the measured surface alone
         extra, extra_normals = np.zeros((0, 3)), np.zeros((0, 3))
     points, normals = points[clear], normals[clear]

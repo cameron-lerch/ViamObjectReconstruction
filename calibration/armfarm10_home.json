@@ -1,15 +1,15 @@
 {
   "camera_mm": [
-    546.4,
-    139.0,
-    332.1
+    546.6,
+    138.5,
+    331.9
   ],
   "board_center_mm": [
-    546.4,
-    139.0,
-    2.1
+    546.6,
+    138.5,
+    1.9
   ],
   "slid_toward_arm_mm": 0.0,
-  "saved": "2026-11-11 11:22",
+  "saved": "2026-11-11 17:02",
   "note": "Home position: the camera here, looking straight down at the ChArUco mat. Found by the survey; delete this file to find it again."
 }
