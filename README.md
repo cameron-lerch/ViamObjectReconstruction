@@ -89,8 +89,8 @@ For each object, it plans a set of camera viewpoints and checks that each one is
 **4. Results** are saved in `data/<scan date and time>/object_<NN>/`:
 - `recon/watertight_mesh.obj` is the final mesh. It's watertight: the measured surface, with the bottom and any gaps no view could see filled in ([§5.8](#58-closing-the-mesh)).
 - `recon/open_mesh.obj` is only the surface the camera measured (seen by at least 2 views), fused and smoothed but not closed, so it's open at the bottom and wherever no view reached.
-- `progression.png` shows how the point cloud and the meshes build up from 1 view to all of them ([§6.5](#65-how-many-views-are-needed)), and `progression_vid.mp4` (and `.gif`) plays the scan back view by view: the color image, the growing point cloud and the growing mesh, side by side.
-- `views/view_<NNN>/` holds each view: its color image (the first frame), its depth image (the per-pixel median of its frames), a colored preview of the depth, and `view.json` with the camera's pose and the arm's joints. A `--full-scan` also keeps every raw frame, in `frames/`.
+- `progression.png` shows how the point cloud and the meshes build up from 1 view to all of them ([§6.5](#65-how-many-views-are-needed)), and `progression_vid.mp4` (and `.gif`) plays the scan back view by view: the color image, the cumulative point cloud and the cumulative open mesh, side by side.
+- `views/view_<NNN>/` holds each view: its color image (the first frame), its depth image (the per-pixel median of its frames), a colored preview of the depth, and `view.json` with the camera's pose and the arm's joints. Every raw frame is kept too, in `frames/`.
 - To look at the meshes, use `data_viewer.py`, a program like Blender, or an online viewer like [3DViewer.net](https://3dviewer.net/#).
 
 ---
@@ -207,7 +207,7 @@ Every choice in these steps was compared on real scans, against caliper measurem
 ## 3. Results
 
 <p align="center">
-  <img src="media/images/progression_vid_bowl.gif" alt="Time-lapse of the 3D-printed bowl's scan, view by view: on the left, the color image of each view; in the middle, the point cloud growing as views are added; on the right, the mesh fused from every view so far, filling in from a few patches into the whole bowl" width="1000">
+  <img src="media/images/progression_vid_bowl.gif" alt="Time-lapse of the 3D-printed bowl's scan, view by view: on the left, the color image of each view; in the middle, the point cloud growing as views are added; on the right, the cumulative open mesh, filling in from a few patches into the whole bowl" width="1000">
   <br><sub><b>REAL DATA.</b> The 3D-printed bowl's full scan (46 views), played back view by view</sub>
 </p>
 
@@ -769,7 +769,7 @@ python analysis/compare.py data/<session> --vary mount=<a.json>,<b.json>        
 python analysis/compare.py data/<realsense scan> data/<orbbec scan>                     # two rigs
 ```
 
-- **What can vary:** `frames` rebuilds each view's depth from its first k raw frames, which `scan.py --full-scan` keeps (by default as the median; using all 50 reproduces the saved depth exactly). `mount` re-places every view with another camera mount, starting from the poses as captured. `views` uses a subset spread over all directions. Any setting can also be varied by its name in `config.toml`, and several `--vary` options give every combination.
+- **What can vary:** `frames` rebuilds each view's depth from its first k raw frames, which every scan keeps (by default as the median; using all 50 reproduces the saved depth exactly). `mount` re-places every view with another camera mount, starting from the poses as captured. `views` uses a subset spread over all directions. Any setting can also be varied by its name in `config.toml`, and several `--vary` options give every combination.
 - **What is measured:** how far single views lie from the fused surface ("views disagree"), roughness, volume, the measured share, the size against the calipers (`ground_truth.toml`), and, for the 3D-printed objects, the surface error against their CAD model.
 - **CAD comparison** ([`recon/cad.py`](recon/cad.py)): the printed object's STL is stood on the table where the scan found it, and the scan's measured surface is fitted onto it. The fit is rigid (rotation and shift, never scale, so a scan that's too big stays too big) and is tried from 12 starting rotations. Then every measured point's signed distance from the true surface is taken, positive outside. The figure colors the surface red where it's outside and blue where it's inside. On the CAD model itself the fit is exact, and a scan made 5% too big shows a positive bias.
 - **Two rigs:** each session records its rig's name (`[machine] rig`), which is used to label it. A second rig gets its own config file ([`config_orbbec.toml`](config_orbbec.toml) is a template) with its own address, camera names and calibration files; its home position is found by its first calibration.
@@ -815,7 +815,7 @@ To answer it, I rebuilt the full scans from 1, 2, 4, 8, 16, 32 and all of their 
 </p>
 
 <p align="center">
-  <img src="media/images/progression_vid_orange_block.gif" alt="Time-lapse of the orange block's scan, view by view: on the left, the color image of each view; in the middle, the point cloud growing as views are added; on the right, the mesh fused from every view so far" width="1000">
+  <img src="media/images/progression_vid_orange_block.gif" alt="Time-lapse of the orange block's scan, view by view: on the left, the color image of each view; in the middle, the point cloud growing as views are added; on the right, the cumulative open mesh" width="1000">
   <br><sub><b>REAL DATA.</b> The orange block's full scan (49 views), played back view by view</sub>
 </p>
 
@@ -824,8 +824,8 @@ To answer it, I rebuilt the full scans from 1, 2, 4, 8, 16, 32 and all of their 
 </p>
 
 <p align="center">
-  <img src="media/images/progression_vid_green_cylinder.gif" alt="Time-lapse of the green cylinder's scan, view by view: on the left, the color image of each view; in the middle, the point cloud growing as views are added; on the right, the mesh fused from every view so far" width="1000">
-  <br><sub><b>REAL DATA.</b> The green cylinder's full scan (50 views), played back view by view</sub>
+  <img src="media/images/progression_vid_pumpkin.gif" alt="Time-lapse of the pumpkin's scan, view by view: on the left, the color image of each view; in the middle, the point cloud growing as views are added; on the right, the cumulative open mesh" width="1000">
+  <br><sub><b>REAL DATA.</b> The pumpkin's scan (44 views, 10 frames each), played back view by view</sub>
 </p>
 
 **Why a few views leave holes.** A single view keeps everything it saw, so the 1-view mesh is the best that one view can give. From 2 views on, a mesh keeps only surface that at least 2 of its views measured, and views from very different directions share little surface: 2 views measure almost nothing, and a few views leave the open mesh full of holes until the views overlap. (`--min-views` changes the 2-view rule for every subset.)
@@ -1205,7 +1205,7 @@ Every command, whether it moves the arm, and what it does:
 | Command | Moves the arm? | What it does |
 |---|---|---|
 | `calibration.py [--plan-only] [--touch-off ask\|yes\|no]` | yes (asks first) | The whole calibration: camera (board), table (survey), gripper (touch-off, asks first). `--plan-only` plans every step without moving the arm |
-| `scan.py [--plan-only] [--max-views K] [--full-scan]` | yes | The whole scan: survey, list the objects, ask before each, scan, park over the mat, build meshes and figures, compare with the calipers where possible. `--plan-only` plans every view without moving the arm. `--max-views 16` captures 16 views spread over all directions. `--full-scan`: 50 frames per view and every raw frame saved in `views/view_NNN/frames/` (about 10MB per view), a dataset for comparing settings later ([§6.3](#63-comparing-settings-methods-and-cameras)) |
+| `scan.py [--plan-only] [--max-views K] [--full-scan]` | yes | The whole scan: survey, list the objects, ask before each, scan, park over the mat, build meshes and figures, compare with the calipers where possible. `--plan-only` plans every view without moving the arm. `--max-views 16` captures 16 views spread over all directions. `--full-scan`: 50 frames per view (every scan saves its raw frames in `views/view_NNN/frames/`; about 10MB per view at 50 frames), a dataset for comparing settings later ([§6.3](#63-comparing-settings-methods-and-cameras)) |
 | `scan.py [--full-scan] --resume data/<session>` | yes | Finish an interrupted scan in the same session: reuses its survey, moves to the home position, looks again from each started object's first view and refuses if the object moved more than 3mm, refuses if the frame settings differ from the first part, then captures only the views still missing (numbered after the existing ones) and builds the meshes from all of them |
 | `scan.py survey [--execute]` | with `--execute` | Overhead views following the table from where the camera is: objects, table plane, calibration board (then a head-on board view); without `--execute`, from the current pose |
 | `scan.py plan [--new-survey]` | no | Reachable views and coverage per object |
@@ -1224,7 +1224,7 @@ Every command, whether it moves the arm, and what it does:
 ### 9.5 View or Playback of a Scan
 
 <p align="center">
-  <img src="media/images/live_viewer.png" alt="The viewer in a browser: the pumpkin's final mesh in color; the first view's point cloud; the RGB-D camera's height view from straight above, the pumpkin's top in red, with axes in its corner; and the monitoring panel showing the Viam logo" width="1000">
+  <img src="media/images/live_viewer.png" alt="The viewer in a browser: the pumpkin's watertight mesh in color; the first view's point cloud; the RGB-D camera's height view from straight above, the pumpkin's top in orange and its stem in red; and the monitoring panel showing the Viam logo" width="1000">
   <br><sub><b>REAL DATA.</b> The pumpkin's scan in <code>data_viewer.py</code></sub>
 </p>
 

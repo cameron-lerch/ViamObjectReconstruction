@@ -2,8 +2,8 @@
 # recon/config.py, where every setting is documented. Distances are mm, world frame.
 
 [machine]
-rig = "armfarm14-realsense"  # saved with every session, to tell rigs apart in comparisons (armfarm12-xarm6-realsense: the xArm6)
-address = "armfarm14-main.310sld03v2.viam.cloud"  # the machine's remote address (Viam app: the machine's CONNECT tab); armfarm12-main.310sld03v2.viam.cloud for the xArm6
+rig = "armfarm10-realsense"  # saved with every session, to tell rigs apart in comparisons (armfarm12-xarm6-realsense: the xArm6)
+address = "armfarm10-main.310sld03v2.viam.cloud"  # the machine's remote address (Viam app: the machine's CONNECT tab); armfarm12-main.310sld03v2.viam.cloud for the xArm6
 credentials = "apikey.json"   # {"api_key": "...", "api_key_id": "..."} from the CONNECT tab's API keys, kept out of git
 arm = "arm"
 camera = "cam"

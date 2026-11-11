@@ -3,8 +3,8 @@
 object from different rigs, each measured the same way. Used by analysis/compare.py.
 
 A variant changes one or more of:
-- `frames`: rebuild each view's depth from its first k raw frames (scans made with
-  `scan.py --full-scan` keep all of them);
+- `frames`: rebuild each view's depth from its first k raw frames (every scan
+  keeps all of them; before 2026-11-10, only `scan.py --full-scan` did);
 - `mount`: re-place every view with another camera mount (a calibration to compare);
 - `views`: use only k views, spread over all directions (as `--max-views` would);
 - any setting, by its name in config.toml, e.g. `reconstruct.voxel` or `reconstruct.closing`.

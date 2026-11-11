@@ -271,7 +271,7 @@ def save_frames(folder: Path, colors: list[bytes], depths: list[np.ndarray], col
 
 def load_view(folder: Path, frames: int | None = None, combine: str = "median",
               min_valid_fraction: float = 0.5) -> View:
-    ''' A saved view. With `frames` (a full scan's raw frames, in folder/frames/), the depth
+    ''' A saved view. With `frames` (the view's raw frames, in folder/frames/), the depth
     is rebuilt from the first `frames` of them (by default the median, exactly as a capture
     of that many frames would have made it) instead of the saved median of all of them. '''
     folder = Path(folder)
@@ -284,7 +284,7 @@ def load_view(folder: Path, frames: int | None = None, combine: str = "median",
         paths = sorted((folder / "frames").glob("depth_*.png"))
         if len(paths) < frames:
             raise ValueError(f"{folder} has {len(paths)} raw depth frames, fewer than {frames} "
-                             "(raw frames are only saved by scan.py --full-scan)")
+                             "(scans before 2026-11-10 saved raw frames only with scan.py --full-scan)")
         depth = combine_depth([np.asarray(o3d.io.read_image(str(p))).astype(np.uint16) for p in paths[:frames]],
                               combine, min_valid_fraction)
     meta = {k: v for k, v in record.items() if k not in ("T_world_cam", "intrinsics")}

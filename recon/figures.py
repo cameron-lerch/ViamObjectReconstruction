@@ -243,7 +243,7 @@ def progression_video(views, poses, planes, obj, config, path: Path, title: str,
                   (render_points(np.asarray(cloud.points), VIDEO_PANEL, elevation, azimuth, center, radius, dot=2,
                                  colors=np.asarray(cloud.colors)), f"Cumulative point cloud ({index} view{'s' if index > 1 else ''})"),
                   (render(mesh, VIDEO_PANEL, elevation, azimuth, center, radius, use_colors=mesh.has_vertex_colors(),
-                          wire_boundary=False), "Open mesh, fused so far")]
+                          wire_boundary=False), "Cumulative open mesh")]
         sheet = Image.new("RGB", (width, height), "white")
         draw = ImageDraw.Draw(sheet)
         draw.text((width / 2, 22), title, fill=(31, 41, 51), font=font(24, True), anchor="mm")

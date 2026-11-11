@@ -1,8 +1,8 @@
 ''' Watch a saved scan in the live viewer, as it looked while it ran.
 
     python data_viewer.py                       # the most recent scan
-    python data_viewer.py 20261030-100851       # a session folder in data/
-    python data_viewer.py 20261030-100851 --object 1 --seconds 2
+    python data_viewer.py 20261110-133259-pumpkin-320mm # a session folder in data/
+    python data_viewer.py 20261103-152101-bowl-280mm --object 1 --seconds 2
 
 Open the printed link. The page is the same one a scan shows (mesh, point cloud, the
 RGB-D camera's color, depth, height and map), stepping through the scan one view about

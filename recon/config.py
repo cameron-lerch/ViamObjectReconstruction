@@ -179,11 +179,12 @@ class CaptureConfig:
     # A move that finishes more than 10mm / 5deg from its target (robot.REACH_TOLERANCE_*) is
     # tried again this many times, from wherever the arm ended up, before the view is skipped.
     move_retries: int = 1
-    # `scan.py --full-scan`: this many frames per scan view, and every raw frame saved
-    # (views/view_NNN/frames/), for a dataset to subsample later. About 2.6s per frame
-    # over the cloud connection, so 50 frames take about 2 minutes per view.
+    # `scan.py --full-scan`: this many frames per scan view, for a dataset to subsample later.
+    # About 2.6s per frame over the cloud connection, so 50 frames take about 2 minutes per view.
     full_scan_frames: int = 50
-    keep_frames: bool = False
+    # Save every raw frame of every scan view (views/view_NNN/frames/), so any scan can be
+    # rebuilt from its frames and debugged later. About 0.15MB per frame (0.7MB per 5-frame view).
+    keep_frames: bool = True
 
 
 @dataclass

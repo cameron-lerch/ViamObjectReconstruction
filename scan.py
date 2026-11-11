@@ -3,7 +3,7 @@
     python scan.py                  # the whole scan: asks once before the arm moves, then before each object
     python scan.py --plan-only      # plan every object on the latest survey (no motion)
     python scan.py --max-views 16   # about half the time: 16 views per object, spread over all directions
-    python scan.py --full-scan      # 50 frames per view, every raw frame saved (a dataset; about 2 min per view)
+    python scan.py --full-scan      # 50 frames per view (a dataset; about 2 min per view)
     python scan.py --frames 20      # 20 frames per view (default 5; with --full-scan, instead of 50)
     python scan.py --full-scan --resume data/20261029-155544   # finish an interrupted scan (same options)
 
@@ -532,8 +532,8 @@ def main() -> None:
                         help="continue an interrupted scan in that session folder (e.g. data/20261029-155544): "
                              "reuses its survey, checks the objects haven't moved, skips views already captured")
     parser.add_argument("--full-scan", action="store_true",
-                        help="50 frames per scan view, and every raw frame saved (a dataset to subsample later; "
-                             "about 2 minutes per view)")
+                        help="50 frames per scan view (a dataset to subsample later; about 2 minutes per view). "
+                             "Every scan saves its raw frames, full or not")
     parser.add_argument("--frames", type=int, metavar="N",
                         help="frames per scan view (default: frames_per_view in config.toml, 5; with --full-scan, "
                              "how many frames it captures and keeps instead of 50)")
@@ -566,7 +566,7 @@ def main() -> None:
     if args.full_scan:
         config.capture.frames_per_view = args.frames or config.capture.full_scan_frames
         config.capture.keep_frames = True
-        log.info("Full scan: %d frames per view, every raw frame saved (about %.0f minutes per view)",
+        log.info("Full scan: %d frames per view (about %.0f minutes per view)",
                  config.capture.frames_per_view, config.capture.frames_per_view * 2.6 / 60)
     elif args.frames:
         config.capture.frames_per_view = args.frames
