@@ -48,8 +48,15 @@ SMOOTH = 6.0  # tuck and height are medians over outline points within this dist
 SURFACE_GAP = 10.0
 # Table scraps: points this low (mm) that lie outside the outline of everything higher,
 # by more than SCRAP_MARGIN (mm). Judgment, from the second 2026-10-28 pumpkin scan.
+# For a low object the limit drops to SCRAP_SHARE of its height: a cable lying flat
+# (strands about 8mm tall, 24mm where loops cross) is mostly under 15mm, and lost 64%
+# of its points as "scraps" on 2026-11-11.
 SCRAP_HEIGHT = 15.0
+SCRAP_SHARE = 0.2
 SCRAP_MARGIN = 3.0
+# Closing keeps every piece with at least this share of the largest piece's triangles
+# (a cable's plug end can close as its own piece); Poisson's small bubbles are dropped.
+KEEP_PIECE = 0.05
 # A closed mesh reaching further than this (mm) past the points it was fit to has
 # ballooned (Poisson does on thin slivers, such as 2 views of a pumpkin's top).
 BALLOON_MARGIN = 20.0
@@ -222,7 +229,9 @@ def table_scraps(points: np.ndarray, table: TablePlane) -> np.ndarray:
     wrap a surface around it, and sometimes balloons instead.
     '''
     heights = table.height(points)
-    low = heights < SCRAP_HEIGHT
+    if len(heights) == 0:
+        return np.zeros(0, dtype=bool)
+    low = heights < min(SCRAP_HEIGHT, SCRAP_SHARE * np.percentile(heights, 98))
     if low.all() or not low.any():
         return np.zeros(len(points), dtype=bool)
     _, u, v = _table_axes(table)
@@ -299,9 +308,10 @@ def close_with_flat_bottom(cloud: o3d.geometry.PointCloud, table: TablePlane, de
     samples.normals = o3d.utility.Vector3dVector(np.vstack([normals, extra_normals]))
     with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Error):
         mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(samples, depth=depth, scale=scale, linear_fit=True)
-    # Poisson can add small detached bubbles; keep the object.
+    # Poisson can add small detached bubbles; keep the object's pieces.
     labels, counts, _ = mesh.cluster_connected_triangles()
-    mesh.remove_triangles_by_mask(np.asarray(labels) != int(np.argmax(counts)))
+    counts = np.asarray(counts)
+    mesh.remove_triangles_by_mask(counts[np.asarray(labels)] < KEEP_PIECE * counts.max())
     mesh.remove_unreferenced_vertices()
     # Flatten whatever dips below the table onto it.
     vertices = np.asarray(mesh.vertices)
@@ -315,5 +325,89 @@ def close_with_flat_bottom(cloud: o3d.geometry.PointCloud, table: TablePlane, de
                               or np.any(vertices.max(axis=0) > fitted.max(axis=0) + BALLOON_MARGIN)):
         log.warning("  closing failed (the surface ballooned past the data); too little was seen to close it")
         return o3d.geometry.TriangleMesh()
+    mesh.compute_vertex_normals()
+    return mesh
+
+
+def close_as_height_field(cloud: o3d.geometry.PointCloud, table: TablePlane, cell: float = 1.5,
+                          seen_table: np.ndarray | None = None) -> o3d.geometry.TriangleMesh:
+    ''' Closed mesh of a low object as solid from the table up to its measured top.
+
+    For things lying flat (a coiled cable): the underside is never seen, so filling
+    straight down is as good a guess as any, and unlike Poisson it can't balloon or
+    bridge the gaps between strands. The top is the highest fused point in each
+    `cell`-mm square; small gaps in the sampling are closed, while gaps where the
+    table was seen (`seen_table`, from `table_seen`) stay open. Built directly as
+    columns over the grid (top, walls, bottom), so it is closed by construction.
+    '''
+    points = np.asarray(cloud.points)
+    heights = table.height(points)
+    keep = heights > 0
+    if keep.sum() < 50:
+        return o3d.geometry.TriangleMesh()
+    points, heights = points[keep], heights[keep]
+    normal, u, v = _table_axes(table)
+    flat = np.stack([points @ u, points @ v], axis=1)
+    low = flat.min(axis=0) - 3 * cell
+    at = ((flat - low) / cell).astype(int)
+    shape = tuple(at.max(axis=0) + 4)
+    top = np.full(shape, -np.inf)
+    np.maximum.at(top, (at[:, 0], at[:, 1]), heights)
+    occupied = np.isfinite(top)
+    # Close sampling gaps (a cell or two), then drop specks of noise.
+    filled = ndimage.binary_closing(occupied, iterations=1)
+    if seen_table is not None and len(seen_table):
+        seen = ((np.stack([seen_table @ u, seen_table @ v], axis=1) - low) / cell).astype(int)
+        inside = np.all((seen >= 0) & (seen < shape), axis=1)
+        table_cells = np.zeros(shape, dtype=bool)
+        table_cells[seen[inside, 0], seen[inside, 1]] = True
+        filled &= ~(table_cells & ~occupied)  # a gap the camera saw table through stays a gap
+    filled = ndimage.binary_opening(filled)
+    pieces, count = ndimage.label(filled)
+    if count == 0:
+        return o3d.geometry.TriangleMesh()
+    sizes = ndimage.sum(filled, pieces, index=np.arange(1, count + 1))
+    filled = np.isin(pieces, np.flatnonzero(sizes >= KEEP_PIECE * sizes.max()) + 1)
+    # Heights: empty cells inside take their neighbors' highest, then a 3x3 median smooths.
+    grid = np.where(occupied, top, 0.0)
+    for _ in range(3):
+        grid = np.where(filled & ~np.isfinite(top) & (grid == 0), ndimage.grey_dilation(grid, size=3), grid)
+    grid = np.where(filled, ndimage.median_filter(grid, size=3), 0.0)
+    grid = np.maximum(grid, cell)  # every column has some height
+
+    # Vertices at grid corners, top and bottom; a corner's top is its highest filled cell.
+    corners = np.zeros((shape[0] + 1, shape[1] + 1))
+    for di in (0, 1):
+        for dj in (0, 1):
+            padded = np.zeros_like(corners)
+            padded[di:di + shape[0], dj:dj + shape[1]] = np.where(filled, grid, 0.0)
+            corners = np.maximum(corners, padded)
+    index = -np.ones(corners.shape, dtype=int)
+    used = np.zeros(corners.shape, dtype=bool)
+    for di in (0, 1):
+        for dj in (0, 1):
+            used[di:di + shape[0], dj:dj + shape[1]] |= filled
+    index[used] = np.arange(used.sum())
+    ci, cj = np.nonzero(used)
+    xy = low + np.stack([ci, cj], axis=1) * cell
+    on_plane = -table.offset * normal
+    base = on_plane + xy[:, :1] * u + xy[:, 1:] * v
+    n = len(base)
+    vertices = np.vstack([base + np.outer(corners[ci, cj], normal), base])  # tops, then bottoms
+    i, j = np.nonzero(filled)
+    a, b, c, d = index[i, j], index[i + 1, j], index[i + 1, j + 1], index[i, j + 1]
+    # u x v is the table normal, so (a, b, c) counterclockwise in (u, v) faces up.
+    triangles = [np.stack([a, b, c], 1), np.stack([a, c, d], 1),            # top, facing up
+                 np.stack([a + n, c + n, b + n], 1), np.stack([a + n, d + n, c + n], 1)]  # bottom, facing down
+    # Walls along every edge between a filled cell and an empty one, facing out.
+    padded = np.pad(filled, 1)
+    for di, dj, p0, p1 in ((1, 0, (1, 0), (1, 1)), (-1, 0, (0, 1), (0, 0)), (0, 1, (1, 1), (0, 1)), (0, -1, (0, 0), (1, 0))):
+        out = filled & ~padded[1 + di:1 + di + shape[0], 1 + dj:1 + dj + shape[1]]
+        oi, oj = np.nonzero(out)
+        s, e = index[oi + p0[0], oj + p0[1]], index[oi + p1[0], oj + p1[1]]
+        triangles += [np.stack([s, s + n, e], 1), np.stack([e, s + n, e + n], 1)]
+    mesh = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(vertices),
+                                     o3d.utility.Vector3iVector(np.vstack(triangles)))
+    mesh.remove_duplicated_triangles()
     mesh.compute_vertex_normals()
     return mesh

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import open3d as o3d
+from scipy import ndimage
 from scipy.spatial import ConvexHull, cKDTree
 
 from .config import WorkspaceConfig
@@ -24,6 +25,20 @@ BASE_REACH = 100.0
 # A box ignores this share of an object's points, the farthest from its middle, so a
 # few stray points can't stretch or turn it (they stretched a pumpkin's 150mm to 165-207mm).
 BOX_TRIM = 0.02
+# Joining pieces of one object (a cable's plug and its coil): a pixel is "not table" when
+# its color is this far (RGB, 0-1) from the table's color around it. Judgment, from the
+# 2026-11-11 cable survey: the black cable is about 1 away, shadows and marks under 0.2.
+NOT_TABLE_COLOR = 0.3
+TABLE_HEIGHT = 3.0  # points within this height (mm) of the table give the table's color
+# Growing a target's box over the object-colored pixels connected to it (a cable's flat
+# loops): only points from GROW_MIN_HEIGHT (mm) up to the survey's min_object_height (the
+# flat parts depth alone leaves out), at most GROW_LIMIT (mm) past the box from depth, and
+# only when they add at least GROW_MIN_SHARE more points (and GROW_MIN_POINTS): shading
+# at a solid object's base adds a few percent, a cable's loops more than the plug itself.
+GROW_MIN_HEIGHT = 1.0
+GROW_LIMIT = 150.0
+GROW_MIN_POINTS = 30
+GROW_MIN_SHARE = 0.25
 
 
 @dataclass
@@ -268,6 +283,105 @@ def not_a_target(obj: DetectedObject, points: np.ndarray, heights: np.ndarray, w
     return ""
 
 
+def not_table_pixels(color: np.ndarray, pixels: np.ndarray, heights: np.ndarray, cell: int = 40) -> np.ndarray:
+    ''' Pixels whose color stands out from the table around them (HxW bool).
+
+    The table's color comes only from pixels whose depth puts them on the table
+    (`pixels` and `heights` of the view's points), averaged over `cell`-pixel squares
+    so slow shading across the table doesn't count; squares with too little table
+    take the table's overall color. Objects never tint it, however big or dark.
+    '''
+    image = color.astype(float) / 255.0
+    rows, cols = image.shape[:2]
+    on = np.abs(heights) < TABLE_HEIGHT
+    r, c = pixels[on, 0], pixels[on, 1]
+    seen = image[r, c]
+    overall = np.median(seen, axis=0) if len(seen) else np.median(image.reshape(-1, 3), axis=0)
+    grid = (-(-rows // cell), -(-cols // cell))
+    index = (r // cell) * grid[1] + c // cell
+    count = np.bincount(index, minlength=grid[0] * grid[1])
+    table = np.stack([np.bincount(index, seen[:, i], minlength=grid[0] * grid[1]) for i in range(3)], axis=1)
+    table = np.where(count[:, None] >= 10, table / np.maximum(count, 1)[:, None], overall).reshape(*grid, 3)
+    full = np.stack([ndimage.zoom(table[..., i], cell, order=1)[:rows, :cols] for i in range(3)], axis=-1)
+    return np.linalg.norm(image - full, axis=2) > NOT_TABLE_COLOR
+
+
+def join_connected(objects: list[DetectedObject], skipped: list[DetectedObject], points: np.ndarray,
+                   pixels: np.ndarray, heights: np.ndarray, color: np.ndarray,
+                   workspace: WorkspaceConfig) -> tuple[list[DetectedObject], list[DetectedObject]]:
+    ''' Join skipped pieces to the scan target they're connected to in the image, and
+    grow each target's box over the object-colored pixels connected to it.
+
+    A cable's plug can stand tall enough to be a target while its coil is too flat
+    and is skipped; the thin cable between them barely rises above the table's
+    depth noise, so depth alone sees two things. In color the cable is unbroken.
+    Strands lying flat (under `min_object_height`) aren't part of any piece at all,
+    so the box also grows over those low points whose pixels belong to the target's
+    run of not-table pixels, up to GROW_LIMIT mm past the box from depth.
+
+    Color alone decides what's connected: a patch of bad depth beside an object has
+    the table's color, so it never joins. Things with bare table between them stay
+    apart, however close; a run of pixels touching two targets grows neither, and a
+    piece touching two targets stays an obstacle. Returns (targets, still skipped).
+    '''
+    if not objects:
+        return objects, skipped
+    standing = heights > workspace.min_object_height
+    mask = ndimage.binary_closing(not_table_pixels(color, pixels, heights), iterations=2)
+    labels, _ = ndimage.label(mask, structure=np.ones((3, 3)))
+
+    def members(obj: DetectedObject) -> np.ndarray:
+        return standing & obj.contains(points, 2.0)
+
+    def regions(inside: np.ndarray) -> set[int]:
+        found = labels[pixels[inside, 0], pixels[inside, 1]]
+        return set(found[found > 0].tolist())
+
+    target_regions = [regions(members(obj)) for obj in objects]
+    joined = [members(obj) for obj in objects]
+    left = []
+    for piece in skipped:
+        inside = members(piece)
+        touching = [i for i, r in enumerate(target_regions) if r & regions(inside)]
+        if len(touching) == 1:
+            joined[touching[0]] |= inside
+            target_regions[touching[0]] |= regions(inside)
+            log.info("  joined the piece at (%.0f, %.0f), %.0f x %.0f x %.0fmm, to the object at (%.0f, %.0f): "
+                     "connected in the image", *piece.center[:2], *piece.size, *objects[touching[0]].center[:2])
+        else:
+            left.append(piece)
+    # Grow over the flat parts: points on the table's surface or above it (not below)
+    # whose pixels are in a run of not-table pixels that only this target touches.
+    shared = set()
+    for i, r in enumerate(target_regions):
+        shared |= {region for region in r if any(region in other for j, other in enumerate(target_regions) if j != i)}
+    point_labels = labels[pixels[:, 0], pixels[:, 1]]
+    lying = (heights > GROW_MIN_HEIGHT) & ~standing
+    result = []
+    for obj, inside, owned in zip(objects, joined, target_regions):
+        own = list(owned - shared)
+        if own:
+            near = obj.contains(np.column_stack([points[:, :2], np.full(len(points), obj.center[2])]), GROW_LIMIT)
+            grown = lying & near & np.isin(point_labels, own)
+            new = (grown & ~inside).sum()
+            if new >= max(GROW_MIN_POINTS, GROW_MIN_SHARE * inside.sum()):
+                inside = inside | grown
+        if inside.sum() == members(obj).sum():
+            result.append(obj)
+            continue
+        cluster = points[inside]
+        center_xy, extents, yaw = object_box(cluster[:, :2])
+        bottom = obj.center[2] - obj.size[2] / 2
+        top = max(obj.center[2] + obj.size[2] / 2, float(np.percentile(cluster[:, 2], TOP_PERCENTILE)))
+        grew = DetectedObject(obj.id, np.array([*center_xy, (top + bottom) / 2]),
+                              np.array([*extents, top - bottom]), yaw, len(cluster), obj.color)
+        if np.any(grew.size[:2] > obj.size[:2] + 5):
+            log.info("  object at (%.0f, %.0f): box grows from %.0f x %.0f to %.0f x %.0fmm over the connected "
+                     "object-colored pixels", *obj.center[:2], *obj.size[:2], *grew.size[:2])
+        result.append(grew)
+    return result, left
+
+
 def merge_views(detections: list[tuple[np.ndarray, list[DetectedObject]]], gap: float = 15.0) -> list[DetectedObject]:
     ''' Combine per-view detections: each object comes from the view that sees it
     closest to straight below the camera, where it is least distorted.
@@ -285,22 +399,29 @@ def merge_views(detections: list[tuple[np.ndarray, list[DetectedObject]]], gap: 
     return [DetectedObject(index, o.center, o.size, o.yaw_deg, o.n_points, o.color) for index, o in enumerate(kept)]
 
 
-def views_agree(obj: DetectedObject, clouds: list[tuple[np.ndarray, np.ndarray]]) -> tuple[int, int]:
+def views_agree(obj: DetectedObject, clouds: list[tuple[np.ndarray, np.ndarray]],
+                cell: float = 5.0) -> tuple[int, int]:
     ''' How many survey views saw `obj`'s spot, and how many of them saw something standing there.
 
     `clouds` holds each view's points and their heights above that view's table. A view
-    saw the spot if it has at least 5 points within the object's outline (a circle of
-    half its shorter side); it saw something standing if the highest of them (95th
-    percentile) reach half the object's height. The whole outline, not just its middle,
-    so a bowl's rim counts (its middle is its floor).
+    saw the spot if its points cover at least half of the object's box seen from above
+    (in `cell`-mm squares), so a view that catches only a corner of a big box doesn't
+    vote. It saw something standing if at least 10 of those points reach half the
+    object's height: the whole box, not just its middle, so a bowl's rim counts (its
+    middle is its floor), and a count, not a share, since a coiled cable covers only a
+    small part of its box and its tallest part (a plug) may sit far from the center.
     '''
-    radius = 0.5 * min(obj.size[:2])
+    total = max(1, int(np.ceil(obj.size[0] / cell)) * int(np.ceil(obj.size[1] / cell)))
     seen = standing = 0
     for points, heights in clouds:
-        inside = np.linalg.norm(points[:, :2] - obj.center[:2], axis=1) < radius
-        if inside.sum() >= 5:
+        inside = obj.contains(np.column_stack([points[:, :2], np.full(len(points), obj.center[2])]))
+        if inside.sum() < 5:
+            continue
+        local = (points[inside, :2] - obj.center[:2]) @ rotation_z(obj.yaw_deg)[:2, :2] + obj.size[:2] / 2
+        covered = len(np.unique(np.floor(local / cell).astype(int), axis=0))
+        if covered >= 0.5 * total:
             seen += 1
-            standing += bool(np.percentile(heights[inside], 95) >= 0.5 * obj.size[2])
+            standing += bool((heights[inside] >= 0.5 * obj.size[2]).sum() >= 10)
     return seen, standing
 
 
@@ -317,6 +438,11 @@ def color_name(rgb) -> str:
     # Measured on armfarm14: the table and cables have saturation under 0.1, the test
     # objects' hues are about 11deg (orange), 43deg (yellow) and 154deg (green). The
     # boundaries below are the usual color wheel's, placed between those.
+    # Near black, saturation means nothing: a black cable at (0.06, 0.06, 0.05) has
+    # saturation 0.25 and read as "yellow" (2026-11-12), so darkness decides first.
+    # Black cables measure 0.06-0.09 bright; the dark blue tape roll 0.15-0.2.
+    if value < 0.12:
+        return "black"
     if saturation < 0.25:
         return "white" if value > 0.75 else ("black" if value < 0.2 else "gray")
     hue *= 360

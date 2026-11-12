@@ -13,7 +13,7 @@ without it, they look and plan from wherever the arm is now):
     python scan.py survey                 # find the table and objects from the current pose
     python scan.py plan                   # reachable views and coverage per object (no motion)
     python scan.py scan --execute --step  # the full run, confirming each object
-    python scan.py scan --execute --confirm-moves --reuse-survey --objects 2 --max-views 3
+    python scan.py scan --execute --confirm-moves --objects 2 --max-views 3
     python scan.py calibrate --objects 1  # estimate the camera mount from a scanned object
     python scan.py calibrate-board        # ChArUco board: plan views (add --execute to capture and solve)
     python scan.py reconstruct            # rebuild meshes from the latest session's saved views
@@ -215,7 +215,8 @@ async def run_steps(robot: Robot, args, config: Config) -> None:
     if args.command == "calibrate-board":
         await board_step(robot, config, args.execute, args.save_mount)
         return
-    reuse = (args.command == "plan" and not args.new_survey) or (args.command == "scan" and args.reuse_survey)
+    # A scan always surveys first, so it scans what is on the table now; plan (no motion) uses the latest survey.
+    reuse = args.command == "plan" and not args.new_survey
     if reuse:
         session = Session.latest(config.resolve(config.data_dir), surveyed=True)
         objects, plane = session.load_scene()
@@ -538,7 +539,6 @@ def main() -> None:
                         help="frames per scan view (default: frames_per_view in config.toml, 5; with --full-scan, "
                              "how many frames it captures and keeps instead of 50)")
     parser.add_argument("--max-views", type=int, help="scan: capture only N of each object's views, spread over all directions (16 measured every side of the test blocks)")
-    parser.add_argument("--reuse-survey", action="store_true", help="scan: use the latest survey instead of surveying again")
     parser.add_argument("--objects", type=object_list, help="object ids from the survey, e.g. 0,2 (default: all)")
     parser.add_argument("--new-survey", action="store_true", help="plan: survey again instead of using the latest")
     parser.add_argument("--session", help="reconstruct: session folder (default: latest)")

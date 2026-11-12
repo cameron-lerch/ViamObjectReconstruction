@@ -26,7 +26,7 @@ import open3d as o3d
 from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
-from .bottom import boundary_edge_count, close_with_flat_bottom, enclosed_volume, table_seen
+from .bottom import boundary_edge_count, close_as_height_field, close_with_flat_bottom, enclosed_volume, table_seen
 from .config import Config, ReconstructConfig
 from .rgbd import OUTLIER_NEIGHBORS, OUTLIER_STD, View, back_project, incidence_deg, to_point_cloud
 from .scene import TOP_PERCENTILE, DetectedObject, TablePlane, min_area_rectangle
@@ -415,14 +415,33 @@ def build_mesh(views: list[View], poses: list[np.ndarray], planes: list[TablePla
         mesh = close_with_flat_bottom(cloud, table, settings.poisson_depth, settings.poisson_scale,
                                       settings.footprint_shrink, settings.base_band,
                                       priors=settings.closing == "flat_bottom", seen_table=seen)
+    elif settings.closing == "height_field":
+        seen = table_seen(views, poses, table, obj.center, obj.footprint_radius + 10.0) if settings.see_through_holes else None
+        mesh = close_as_height_field(cloud, table, settings.voxel, seen)
     elif settings.closing == "none":
         mesh = observed
     else:
-        raise ValueError(f"Unknown closing {settings.closing!r}: flat_bottom, poisson or none")
+        raise ValueError(f"Unknown closing {settings.closing!r}: flat_bottom, height_field, poisson or none")
     if settings.smooth_target in ("final", "both"):
         # The closed mesh is built from the fused points, not from the smoothed observed surface.
         mesh = smooth(mesh if settings.closing != "none" else o3d.geometry.TriangleMesh(mesh), settings)
     return FusedMesh(observed, mesh, cloud, table)
+
+
+def _main_cluster(points: np.ndarray, obj: DetectedObject, margin: float, settings: ReconstructConfig) -> np.ndarray | None:
+    ''' The biggest cluster of `points` whose center lies within `margin` of the old box. '''
+    if len(points) < 200:
+        return None
+    cloud = to_point_cloud(points).voxel_down_sample(settings.voxel)
+    cloud, _ = cloud.remove_statistical_outlier(OUTLIER_NEIGHBORS, OUTLIER_STD)
+    points = np.asarray(cloud.points)
+    # DBSCAN: points within 4mm (a few voxels) join a cluster of at least 10 points.
+    labels = np.asarray(cloud.cluster_dbscan(4.0, 10))
+    if labels.max() < 0:
+        return None
+    clusters = [points[labels == k] for k in range(labels.max() + 1)]
+    clusters = [c for c in clusters if np.linalg.norm(c.mean(axis=0)[:2] - obj.center[:2]) < obj.footprint_radius + margin]
+    return max(clusters, key=len) if clusters else None
 
 
 def refit_object(views: list[View], poses: list[np.ndarray], obj: DetectedObject, plane: TablePlane,
@@ -434,31 +453,33 @@ def refit_object(views: list[View], poses: list[np.ndarray], obj: DetectedObject
     away), and a box in the wrong place cuts a slice off the object in every
     view. Points above each view's own table, within a generous search margin
     of the old box, are clustered, and the box is refit around the main cluster.
+    When the main cluster runs into the edge of the search region (a cable's lead,
+    or part of an object the survey never saw), the search widens in steps of
+    `refit_search`, up to `refit_follow` mm past the old box, so the box follows
+    the object instead of cutting it off.
     '''
     settings = config.reconstruct
+    widest = settings.refit_search + max(0.0, settings.refit_follow)
     gathered = []
     for view, pose in zip(views, poses):
         table = local_table_plane(view, pose, obj, plane, config)
         points, _, _ = back_project(view, 4, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
         # 3mm above the usual clearance, so the base's flared pixels can't widen the box.
-        keep = obj.contains(points, settings.refit_search) & (table.height(points) > settings.table_clearance + 3)
+        keep = obj.contains(points, widest) & (table.height(points) > settings.table_clearance + 3)
         gathered.append(points[keep])
-    points = np.concatenate(gathered) if gathered else np.zeros((0, 3))
-    if len(points) < 200:
-        return obj
-    cloud = to_point_cloud(points).voxel_down_sample(settings.voxel)
-    cloud, _ = cloud.remove_statistical_outlier(OUTLIER_NEIGHBORS, OUTLIER_STD)
-    points = np.asarray(cloud.points)
-    # DBSCAN: points within 4mm (a few voxels) join a cluster of at least 10 points.
-    labels = np.asarray(cloud.cluster_dbscan(4.0, 10))
-    if labels.max() < 0:
-        return obj
-    # The biggest cluster whose center lies within the search region of the old box.
-    clusters = [points[labels == k] for k in range(labels.max() + 1)]
-    clusters = [c for c in clusters if np.linalg.norm(c.mean(axis=0)[:2] - obj.center[:2]) < obj.footprint_radius + settings.refit_search]
-    if not clusters:
-        return obj
-    main = max(clusters, key=len)
+    everything = np.concatenate(gathered) if gathered else np.zeros((0, 3))
+    margin = settings.refit_search
+    while True:
+        main = _main_cluster(everything[obj.contains(everything, margin)], obj, margin, settings)
+        if main is None:
+            return obj
+        # Points within 2 voxels of the search region's edge: the object goes on past it.
+        at_edge = (~obj.contains(main, margin - 2 * settings.voxel)).sum()
+        if at_edge < 10 or margin >= widest:
+            break
+        margin = min(widest, margin + settings.refit_search)
+    if margin > settings.refit_search:
+        log.info("  object %d runs past the survey's box: refit searched %.0fmm out", obj.id, margin)
     center_xy, extents, yaw = min_area_rectangle(main[:, :2])
     bottom = float(np.median([local_table_plane(v, T, obj, plane, config).z_at(*center_xy) for v, T in zip(views, poses)]))
     top = float(np.percentile(main[:, 2], TOP_PERCENTILE))

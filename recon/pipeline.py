@@ -22,7 +22,8 @@ from .reconstruct import local_table_plane, reconstruct, save_reconstruction, vi
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
 from .rgbd import back_project, load_view, load_views, save_frames, save_view
 from .robot import MissedTarget, MoveDeclined, Robot, RobotUnresponsive, ask_operator
-from .scene import DetectedObject, TablePlane, clutter_around, detect_objects, fit_table_plane, merge_views, views_agree
+from .scene import (DetectedObject, TablePlane, clutter_around, detect_objects, fit_table_plane, join_connected,
+                    merge_views, views_agree)
 from .session import Session
 from .survey_map import survey_map
 from .transforms import look_at, rotation_angle_deg
@@ -241,10 +242,13 @@ async def survey(robot: Robot, session: Session, config: Config, execute: bool) 
     detections, skipped, planes, clouds = [], [], [], []
     for folder in folders:
         view = load_view(folder)
-        points, colors, _ = back_project(view, 2, config.camera.min_depth, config.camera.max_depth)
+        points, colors, pixels = back_project(view, 2, config.camera.min_depth, config.camera.max_depth)
         view_plane = fit_table_plane(points, config.workspace)
         others: list[DetectedObject] = []
-        detections.append((view.camera_position[:2], detect_objects(points, view_plane, config.workspace, colors, others)))
+        found = detect_objects(points, view_plane, config.workspace, colors, others)
+        # Pieces of one object split by depth (a cable's plug and its flat coil) join in color.
+        found, others = join_connected(found, others, points, pixels, view_plane.height(points), view.color, config.workspace)
+        detections.append((view.camera_position[:2], found))
         skipped.append((view.camera_position[:2], others))
         planes.append(view_plane)
         clouds.append((points, view_plane.height(points)))

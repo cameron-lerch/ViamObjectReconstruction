@@ -338,7 +338,7 @@ This section follows the pipeline in order, from finding the objects on the tabl
 
 ### 5.1 Survey: finding the table and what's on it
 
-**Survey vs. scan.** A survey answers *what's on the table, and where?* It takes a few quick overhead views and puts a rough box around each object, without building any meshes. A scan answers *what exactly does each object look like?* It captures views all around one object, stopping at each one, and fuses them into a mesh. A scan runs its own survey first unless it's given `--reuse-survey`. Calibration isn't part of either; it's done once per setup ([§5.5](#55-camera-calibration)).
+**Survey vs. scan.** A survey answers *what's on the table, and where?* It takes a few quick overhead views and puts a rough box around each object, without building any meshes. A scan answers *what exactly does each object look like?* It captures views all around one object, stopping at each one, and fuses them into a mesh. Every scan runs its own survey first, so it always works from what is on the table at that moment. Calibration isn't part of either; it's done once per setup ([§5.5](#55-camera-calibration)).
 
 #### Where the camera looks
 
@@ -1175,13 +1175,13 @@ python scan.py touch-off                              # plan only: check the 3 t
 python scan.py touch-off --execute                    # with you at the arm and a sheet of paper
 ```
 
-**Scanning in stages.** `python scan.py` runs the whole scan. A **survey** finds what's on the table and where, and a **scan** builds each object's mesh. `scan --execute` on its own runs a survey first. To check the survey (and the plan) before scanning, run them separately and then scan with `--reuse-survey`:
+**Scanning in stages.** `python scan.py` runs the whole scan. A **survey** finds what's on the table and where, and a **scan** builds each object's mesh. A scan always runs a survey first, so the objects are found again right before they're scanned. To check the survey (and the plan) on their own first, run them separately:
 
 ```bash
 python scan.py survey --execute                       # overhead views across the table; prints each object's id, center and color
-python scan.py plan                                   # reachable views per object (no motion)
-python scan.py scan --execute --reuse-survey          # every object found (or --objects 0,2)
-python scan.py scan --execute --reuse-survey --max-views 16   # 16 views spread over all directions
+python scan.py plan                                   # reachable views per object, from the latest survey (no motion)
+python scan.py scan --execute                         # surveys again, then scans every object found (or --objects 0,2)
+python scan.py scan --execute --max-views 16          # 16 views spread over all directions
 ```
 
 **After scanning (no arm needed):**
@@ -1195,7 +1195,7 @@ python scan.py progression --objects 1                # meshes, metrics and prog
 **Without a robot:**
 
 ```bash
-python -m pytest                                      # 106 tests
+python -m pytest                                      # 113 tests
 ```
 
 ### 9.4 Commands
@@ -1209,7 +1209,7 @@ Every command, whether it moves the arm, and what it does:
 | `scan.py [--full-scan] --resume data/<session>` | yes | Finish an interrupted scan in the same session: reuses its survey, moves to the home position, looks again from each started object's first view and refuses if the object moved more than 3mm, refuses if the frame settings differ from the first part, then captures only the views still missing (numbered after the existing ones) and builds the meshes from all of them |
 | `scan.py survey [--execute]` | with `--execute` | Overhead views following the table from where the camera is: objects, table plane, calibration board (then a head-on board view); without `--execute`, from the current pose |
 | `scan.py plan [--new-survey]` | no | Reachable views and coverage per object |
-| `scan.py scan --execute [--objects N] [--max-views K] [--reuse-survey]` | yes | Plan and capture every object, return home over the mat, then build each mesh and its progression figure. `--max-views K` captures K views spread over all directions (16 is enough to measure every side of the test blocks) |
+| `scan.py scan --execute [--objects N] [--max-views K]` | yes | Survey, then plan and capture every object, return home over the mat, then build each mesh and its progression figure. `--max-views K` captures K views spread over all directions (16 is enough to measure every side of the test blocks) |
 | `scan.py calibrate --objects N [--save-mount]` | no | Camera mount from a scan; `--save-mount` makes it the mount for all moves and captures |
 | `scan.py calibrate-board [--execute] [--save-mount]` | with `--execute` | ChArUco mat: level check, board views, hand-eye mount and depth error |
 | `scan.py reconstruct [--objects N] [--no-refine]` | no | Re-run reconstruction on saved views |
@@ -1257,7 +1257,7 @@ Each reconstruction writes these files to `data/<session>/object_NN/recon/`:
 
 ### 9.7 Testing
 
-`python -m pytest` runs 106 tests without a robot: pose math against the machine's own numbers, depth decoding, edge filtering, detection, the survey, view geometry, the pose guard, ChArUco detection, hand-eye calibration, and the whole pipeline end to end on shapes of known size.
+`python -m pytest` runs 113 tests without a robot: pose math against the machine's own numbers, depth decoding, edge filtering, detection, the survey, view geometry, the pose guard, ChArUco detection, hand-eye calibration, and the whole pipeline end to end on shapes of known size.
 
 ### 9.8 Repository structure
 

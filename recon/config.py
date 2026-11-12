@@ -248,6 +248,10 @@ class ReconstructConfig:
     # Before fusing, the object's box is refit from the scan's own points found within
     # this far of the survey's box (the survey can be off by more than crop_margin).
     refit_search: float = 40.0
+    # If the object runs into the edge of that search (a cable's lead, or a part the survey
+    # never saw), the search widens in steps of refit_search, up to this far (mm) past
+    # the survey's box. 0 keeps the box within refit_search.
+    refit_follow: float = 150.0
     # Width of the ring of table around the object used to fit the table per view.
     table_ring: float = 30.0
     # Registration also uses a ring of table around the object to lock height and tilt.
@@ -307,7 +311,9 @@ class ReconstructConfig:
     # How the final mesh is closed. "flat_bottom": objects rest flat on the table, so the
     # bottom is filled flat and walls never seen drop from the lowest surface seen
     # (screened Poisson with those priors; see bottom.py). "poisson": screened Poisson
-    # through the measured surface alone, no priors. "none": the observed surface as is
+    # through the measured surface alone, no priors. "height_field": solid from the table up
+    # to the highest point seen in each 1.5mm square (voxel), for things lying flat such as
+    # a coiled cable, where Poisson balloons or bridges the strands. "none": the observed surface as is
     # (open where unseen). The outline is shrunk by footprint_shrink mm because edge
     # noise pads it.
     closing: str = "flat_bottom"
