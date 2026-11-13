@@ -913,3 +913,24 @@ def save_mount(config: Config, mount: np.ndarray, source: str) -> Path:
                                 "note": "Camera pose relative to the arm's end (mm). Used for every move and capture."},
                                indent=2) + "\n")
     return path
+
+
+def prune_board_runs(config: Config) -> list[str]:
+    ''' Delete board calibration runs (data/board-*) that no calibration file names as its
+    source: each arm keeps only the run behind its current camera mount, since a new
+    calibration simply replaces the old one. A run with a file named KEEP in it stays
+    (one used by analysis/compare_calibration.py). Returns the names deleted. '''
+    import shutil
+    used = set()
+    for path in config.resolve("calibration").glob("*.json"):
+        try:
+            source = json.loads(path.read_text()).get("source", "")
+        except (OSError, json.JSONDecodeError):
+            continue
+        used.update(word.strip() for word in str(source).split(",") if word.strip().startswith("board-"))
+    deleted = []
+    for folder in sorted(config.resolve(config.data_dir).glob("board-*")):
+        if folder.is_dir() and folder.name not in used and not (folder / "KEEP").exists():
+            shutil.rmtree(folder)
+            deleted.append(folder.name)
+    return deleted

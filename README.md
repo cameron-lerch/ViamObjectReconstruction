@@ -95,6 +95,11 @@ For each object, it plans a set of camera viewpoints and checks that each one is
 
 ---
 
+<p align="center">
+  <img src="media/images/progression_vid_pumpkin.gif" alt="Time-lapse of the pumpkin's scan, view by view: on the left, the color image of each view; in the middle, the point cloud growing as views are added; on the right, the cumulative open mesh" width="1000">
+  <br><sub><b>REAL DATA.</b> The pumpkin's scan (44 views, 10 frames each), played back view by view</sub>
+</p>
+
 ## Table of Contents
 
 1. [Problem Statement and Goals](#1-problem-statement-and-goals) (including [Breaking Down the Problem](#11-breaking-down-the-problem))
@@ -395,8 +400,8 @@ The same object usually shows up in several survey views. Each object is taken f
 **A numbered map.** Each survey also saves `survey_map.png` in its session folder and shows it in the live viewer. It's the table seen from straight above, put together from the survey views (each 1.5mm cell takes its color from the view looking most directly down on it), with each scan target boxed in green and numbered the same way the terminal lists it, and each obstacle outlined in gray.
 
 <p align="center">
-  <img src="media/images/survey_map.png" alt="The table from above: the calibration board at the top, cables, the orange prism boxed in green as target 0, a small gray thing as target 1, and small obstacles outlined in gray" width="600">
-  <br><sub><b>REAL DATA.</b> A survey's map of the table: +x up, +y left</sub>
+  <img src="media/images/survey_map.png" alt="The table from above: the calibration board and a cable at the top, the pumpkin boxed in green as target 0 in the middle, and small specks of bad depth outlined in gray as obstacles" width="600">
+  <br><sub><b>REAL DATA.</b> The pumpkin scan's survey map of the table: +x up, +y left</sub>
 </p>
 
 #### Everything else is an obstacle
@@ -558,7 +563,7 @@ The planner keeps the gripper off the table using the gripper's collision model,
 - OpenCV: [ChArUco detection tutorial](https://docs.opencv.org/4.x/df/d4a/tutorial_charuco_detection.html), [calib3d module (solvePnP, calibrateHandEye)](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html)
 - calib.io: [calibration pattern generator](https://calib.io/pages/camera-calibration-pattern-generator) (ChArUco boards, DICT_4X4 to DICT_7X7)
 - Intel RealSense: [tuning depth cameras for best performance](https://dev.realsenseai.com/docs/tuning-depth-cameras-for-best-performance/) (depth accuracy vs. distance, edge effects)
-- Viam's `viam:camera-calibration` module (ChArUco pose tracker and hand-eye service), suggested for comparison ([§13.4](#134-calibration-that-just-works))
+- Viam's `viam:camera-calibration` module (ChArUco pose tracker and hand-eye service), suggested for comparison ([§13.4](#134-easier-calibration-with-or-without-the-charuco-board))
 
 #### My solver vs. Viam's camera-calibration module
 
@@ -822,11 +827,6 @@ To answer it, I rebuilt the full scans from 1, 2, 4, 8, 16, 32 and all of their 
 
 <p align="center">
   <img src="media/images/progression_green_cylinder.png" alt="The green cylinder from 1, 8, 16, 32 and 50 views, in three rows: the cumulative point cloud, the open mesh, and the watertight mesh, measured (blue) on every side from 16 views on" width="1000">
-</p>
-
-<p align="center">
-  <img src="media/images/progression_vid_pumpkin.gif" alt="Time-lapse of the pumpkin's scan, view by view: on the left, the color image of each view; in the middle, the point cloud growing as views are added; on the right, the cumulative open mesh" width="1000">
-  <br><sub><b>REAL DATA.</b> The pumpkin's scan (44 views, 10 frames each), played back view by view</sub>
 </p>
 
 **Why a few views leave holes.** A single view keeps everything it saw, so the 1-view mesh is the best that one view can give. From 2 views on, a mesh keeps only surface that at least 2 of its views measured, and views from very different directions share little surface: 2 views measure almost nothing, and a few views leave the open mesh full of holes until the views overlap. (`--min-views` changes the 2-view rule for every subset.)
@@ -1386,7 +1386,7 @@ The scan currently visits fixed rings of viewpoints. A next-best-view planner wo
 - **Prioritize** with a vision-language model (or a [vision-language-action](https://en.wikipedia.org/wiki/Vision-language-action_model) (VLA) policy: a model that takes camera images and a task described in words and outputs the robot's actions directly): which objects matter for the task, which are likely to be hard (shiny, transparent, thin, hollow), and which sides are probably still unseen. A model's uncertainty, or the mesh's measured share, can say which object needs more views next.
 - **Use semantic priors** where the camera can't see. A mug has a handle and a hollow inside, and a box has flat, square faces. For known types of objects, priors like these could replace the generic straight-wall prior ([§5.8](#measured-vs-filled-in-the-open-and-watertight-meshes)).
 
-### 13.4 Calibration that just works
+### 13.4 Easier calibration, with or without the ChArUco board
 
 - **Board-based:** run `calibrate-board` routinely (or on a schedule), and keep its mount, depth model and intrinsics check with each session.
 - **Known objects:** a caliper-measured object, such as the green cylinder, is itself a calibration target. The depth model could be fit so that the scanned object matches its known size.
@@ -1437,7 +1437,7 @@ A first version of this is in the code (`recon/relocate.py`), turned off (`[relo
 - measure the gripper's opening and jaw direction;
 - test pick and place on its own before turning relocation on during scans.
 
-### 13.9 Also
+### 13.9 Other improvements
 
 - **More kinds of objects.** So far I've scanned blocks, cylinders, a pumpkin, a mug, a cup, and 3D-printed objects; next could be a can, a water bottle, or a roll of tape.
 - **Colored meshes.** Vertex colors are already fused; texture maps would need colored ICP and better color calibration.

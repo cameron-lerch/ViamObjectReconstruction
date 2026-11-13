@@ -197,6 +197,9 @@ async def board_step(robot: Robot, config: Config, execute: bool, save_mount: bo
             robot.use_camera_mount(np.array(result["board_mount"]))  # for the rest of this run too (the survey)
             robot.ignore_saved_calibration = False  # the saved one is now this run's
             log.info("Saved as the camera mount for all moves and captures: %s", path)
+            deleted = pipeline.prune_board_runs(config)  # older runs: their calibrations are replaced
+            if deleted:
+                log.info("Deleted %d older board run(s) no calibration uses: %s", len(deleted), ", ".join(deleted))
     return result
 
 
