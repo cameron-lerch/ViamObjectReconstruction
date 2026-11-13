@@ -415,5 +415,5 @@
 <text x="260.0" y="698.0" class="desc" text-anchor="start">(another view may see that region). Readings are averaged, never thrown out, so noise cancels.</text>
 <text x="40.0" y="726.0" class="bold" text-anchor="start">When the surface is extracted</text>
 <text x="260.0" y="726.0" class="desc" text-anchor="start">Only where at least 2 views wrote (one view, alone, keeps all it saw).</text>
-<text x="260.0" y="744.0" class="desc" text-anchor="start">Fragments under 5% of the largest piece are removed; light smoothing (5 Taubin steps).</text>
+<text x="260.0" y="744.0" class="desc" text-anchor="start">Fragments under 5% of the largest piece are removed; light smoothing (5 HC Laplacian steps).</text>
 </svg>

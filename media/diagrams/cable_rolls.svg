@@ -61,7 +61,7 @@
   <text x="501.0" y="412.0" text-anchor="middle" class="small">no</text>
   <rect x="790" y="384" width="400" height="72" rx="10" fill="#EAF6EC" stroke="#2F9E44" stroke-width="1.5"/>
   <text x="990.0" y="408.0" text-anchor="middle" class="bold">Keep the roll closest to the previous view</text>
-  <text x="990.0" y="427.0" text-anchor="middle" class="small">the smallest largest joint change from</text>
+  <text x="990.0" y="427.0" text-anchor="middle" class="small">the smallest maximum joint change from</text>
   <text x="990.0" y="443.0" text-anchor="middle" class="small">the previous view's end joints</text>
   <line x1="730" y1="420" x2="788" y2="420" class="flow"/>
   <text x="759.0" y="412.0" text-anchor="middle" class="small">yes</text>

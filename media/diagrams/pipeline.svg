@@ -19,14 +19,14 @@
 
   <!-- robot lane -->
   <rect x="24" y="64" width="1272" height="232" rx="14" fill="#F0F4F8" stroke="#BCCCDC" stroke-width="1.5"/>
-  <text x="44" y="90" class="lane">ON THE ROBOT  ·  the arm moves only with --execute</text>
+  <text x="44" y="90" class="lane">ON THE ROBOT  ·  python calibration.py once per setup, then python scan.py</text>
 
   <rect x="44" y="104" width="384" height="150" rx="12" fill="#FFFFFF" stroke="#9FB3C8" stroke-width="1.5"/>
   <text x="62" y="132" class="name">1. Survey</text>
-  <text x="62" y="156" class="desc">Camera looks straight down from fixed</text>
-  <text x="62" y="174" class="desc">positions. Per view: fit the table plane,</text>
-  <text x="62" y="192" class="desc">cluster what stands on it into boxed</text>
-  <text x="62" y="210" class="desc">objects.</text>
+  <text x="62" y="156" class="desc">Starting where the camera is, look straight</text>
+  <text x="62" y="174" class="desc">down and follow the table to its edges.</text>
+  <text x="62" y="192" class="desc">Per view: fit the table plane, and box</text>
+  <text x="62" y="210" class="desc">each object standing on it.</text>
   <text x="62" y="240" class="cmd">scan.py survey</text>
 
   <rect x="480" y="104" width="384" height="150" rx="12" fill="#FFFFFF" stroke="#9FB3C8" stroke-width="1.5"/>
@@ -40,7 +40,7 @@
   <rect x="916" y="104" width="360" height="150" rx="12" fill="#FFFFFF" stroke="#9FB3C8" stroke-width="1.5"/>
   <text x="934" y="132" class="name">3. Capture, stop-and-go</text>
   <text x="934" y="156" class="desc">Move, stop, settle 0.6s, take the median</text>
-  <text x="934" y="174" class="desc">of N fresh frames, read the camera pose,</text>
+  <text x="934" y="174" class="desc">of 5 fresh frames, read the camera pose,</text>
   <text x="934" y="192" class="desc">check it against the arm controller.</text>
   <text x="934" y="210" class="desc">Save to disk.</text>
   <text x="934" y="240" class="cmd">scan.py scan --execute</text>
@@ -59,12 +59,12 @@
   <text x="44" y="418" class="lane">OFFLINE  ·  re-run as often as you like on the saved views</text>
 
   <rect x="968" y="432" width="308" height="150" rx="12" fill="#FFFFFF" stroke="#9CCFAE" stroke-width="1.5"/>
-  <text x="986" y="460" class="name">4. Calibrate camera mount</text>
-  <text x="986" y="484" class="desc">Once per setup: the one correction</text>
-  <text x="986" y="502" class="desc">to the camera's mounting pose that</text>
-  <text x="986" y="520" class="desc">makes all views of a still scene</text>
-  <text x="986" y="538" class="desc">agree.</text>
-  <text x="986" y="568" class="cmd">scan.py calibrate</text>
+  <text x="986" y="460" class="name">4. Place each view</text>
+  <text x="986" y="484" class="desc">Arm pose × the camera mount from</text>
+  <text x="986" y="502" class="desc">the ChArUco board calibration</text>
+  <text x="986" y="520" class="desc">(calibration.py, once per setup).</text>
+  <text x="986" y="538" class="desc"></text>
+  <text x="986" y="568" class="cmd">calibration.py</text>
 
   <rect x="660" y="432" width="280" height="150" rx="12" fill="#FFFFFF" stroke="#9CCFAE" stroke-width="1.5"/>
   <text x="678" y="460" class="name">5. Align views</text>
@@ -78,14 +78,14 @@
   <text x="370" y="484" class="desc">Crop each depth map to the object,</text>
   <text x="370" y="502" class="desc">average signed distances in 1.5mm</text>
   <text x="370" y="520" class="desc">voxels; keep surface seen by 2+</text>
-  <text x="370" y="538" class="desc">views: observed.obj</text>
+  <text x="370" y="538" class="desc">views: open_mesh.obj</text>
 
   <rect x="44" y="432" width="280" height="150" rx="12" fill="#FFFFFF" stroke="#9CCFAE" stroke-width="1.5"/>
-  <text x="62" y="460" class="name">7. Close with a flat bottom</text>
-  <text x="62" y="484" class="desc">Poisson surface through observed</text>
-  <text x="62" y="502" class="desc">points + footprint on the table +</text>
-  <text x="62" y="520" class="desc">straight walls where unseen:</text>
-  <text x="62" y="538" class="desc">mesh.obj (watertight)</text>
+  <text x="62" y="460" class="name">7. Close and smooth</text>
+  <text x="62" y="484" class="desc">Poisson through the measured</text>
+  <text x="62" y="502" class="desc">surface, a flat bottom and straight</text>
+  <text x="62" y="520" class="desc">walls where unseen; 5 HC Laplacian</text>
+  <text x="62" y="538" class="desc">steps: watertight_mesh.obj</text>
   <text x="62" y="568" class="cmd">scan.py progression</text>
 
   <path d="M1122,374 L1122,428" class="edge"/>

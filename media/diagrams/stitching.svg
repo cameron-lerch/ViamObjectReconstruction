@@ -27,13 +27,13 @@
   <text x="365" y="172" text-anchor="middle" class="math">y = (v − cy)·d / fy,   z = d</text>
 
   <rect x="500" y="98" width="560" height="96" rx="12" fill="#FFFFFF" stroke="#4A5568" stroke-width="1.5"/>
-  <text x="780" y="126" text-anchor="middle" class="name">world point = C · T(world ← arm end, joints) · M(arm end ← camera) · p</text>
+  <text x="780" y="126" text-anchor="middle" class="name">world point = C · E(world ← arm end, joints) · M(arm end ← camera) · p</text>
   <text x="608" y="156" text-anchor="middle" class="desc">C: per-view correction</text>
-  <text x="608" y="174" text-anchor="middle" class="desc">(step 6, ~1mm)</text>
-  <text x="780" y="156" text-anchor="middle" class="desc">T: arm kinematics</text>
-  <text x="780" y="174" text-anchor="middle" class="desc">(xArm6, ~0.1mm repeatable)</text>
+  <text x="608" y="174" text-anchor="middle" class="desc">(alignment, ~1mm)</text>
+  <text x="780" y="156" text-anchor="middle" class="desc">E: arm kinematics</text>
+  <text x="780" y="174" text-anchor="middle" class="desc">(~0.1mm repeatable)</text>
   <text x="958" y="156" text-anchor="middle" class="desc">M: camera mount</text>
-  <text x="958" y="174" text-anchor="middle" class="desc">(step 5, was 21mm off)</text>
+  <text x="958" y="174" text-anchor="middle" class="desc">(calibrated, was 21mm off)</text>
 
   <rect x="1100" y="98" width="180" height="96" rx="12" fill="#F2FAF4" stroke="#9CCFAE" stroke-width="1.5"/>
   <text x="1190" y="126" text-anchor="middle" class="name">into the TSDF</text>
@@ -56,8 +56,8 @@
   <text x="60" y="436" class="desc">Solve for the single mount correction that makes all</text>
   <text x="60" y="454" class="desc">views agree (point-to-plane over object + table).</text>
   <text x="60" y="472" class="desc">Spread of the table height: std 6.0mm → 1.0mm.</text>
-  <text x="60" y="490" class="desc">Enter the result in the Viam app once; future captures</text>
-  <text x="60" y="508" class="desc">start out right.</text>
+  <text x="60" y="490" class="desc">It's saved in the rig's camera-mount file, and the</text>
+  <text x="60" y="508" class="desc">ChArUco board gives an independent check.</text>
 
   <rect x="460" y="266" width="400" height="300" rx="12" fill="#FFF8E7" stroke="#E0B85A" stroke-width="1.5"/>
   <text x="480" y="296" class="name">Residual per-view error (small)</text>
@@ -76,12 +76,12 @@
   <text x="900" y="296" class="name">Sensor noise (random)</text>
   <text x="900" y="322" class="desc">RealSense depth: ~1-2mm noise at 300mm, flying</text>
   <text x="900" y="340" class="desc">pixels at edges, no data on steep surfaces.</text>
-  <text x="900" y="358" class="desc">Raw roughness of one view: 0.28mm (real cylinder),</text>
-  <text x="900" y="376" class="desc">0.61mm (synthetic).</text>
+  <text x="900" y="358" class="desc">Raw roughness of one view: 0.26-0.27mm</text>
+  <text x="900" y="376" class="desc">(orange block, green cylinder).</text>
   <text x="900" y="410" class="name">Fix: average many views (TSDF)</text>
   <text x="900" y="436" class="desc">Per view: median of 5 frames, edge pixels dropped.</text>
   <text x="900" y="454" class="desc">Across views: signed distances averaged per 1.5mm</text>
   <text x="900" y="472" class="desc">voxel; surface kept only where 2+ views agree.</text>
-  <text x="900" y="490" class="desc">Roughness with 25 views: 0.10mm (real),</text>
-  <text x="900" y="508" class="desc">0.016mm (synthetic, 37 views).</text>
+  <text x="900" y="490" class="desc">Same patch, all views of a full scan:</text>
+  <text x="900" y="508" class="desc">0.09-0.10mm.</text>
 </svg>
