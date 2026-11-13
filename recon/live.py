@@ -45,6 +45,12 @@ log = logging.getLogger(__name__)
 WEB = Path(__file__).resolve().parent.parent / "web"
 POINT_STRIDE = 3  # every 3rd pixel of a view's points: plenty to see, a few hundred KB
 POINT_MARGIN = 60.0  # points within this distance (mm) of the object's box
+# The preview mesh is cropped this far (mm) past the survey's box, not the final mesh's
+# crop_margin: the box is only refit from the scan's own views at the end, and a survey
+# that saw part of an object (half a tape roll, 2026-11-12: the real roll reached 80mm
+# past its box) would otherwise show only that part while scanning. Anything else this
+# close shows in the preview too; the final mesh uses the refit box.
+PREVIEW_MARGIN = 100.0
 ALL_POINTS_VOXEL = 2.0  # the points from every view so far, thinned to one per 2mm cube
 STEP_TRIANGLES = 60000  # each step's preview mesh is simplified to at most this many (1-2MB a step)
 STEP_FILES = ("mesh", "points", "all_points", "color", "depth", "height")
@@ -300,14 +306,22 @@ class Live:
         try:
             started = time.monotonic()
             view = load_view(folder)
+            wide = DetectedObject(obj.id, obj.center, obj.size + [2 * PREVIEW_MARGIN, 2 * PREVIEW_MARGIN, 0.0],
+                                  obj.yaw_deg, obj.n_points, obj.color)
             # Crop at this view's own table, as the final mesh does: near the object the
             # real table can sit a few mm above the survey's, and that band leaked in.
-            table = local_table_plane(view, view.T_world_cam, obj, plane, self.config)
-            integrate(self._grid, view, view.T_world_cam, obj, table, self.config)
+            table = local_table_plane(view, view.T_world_cam, wide, plane, self.config)
+            integrate(self._grid, view, view.T_world_cam, wide, table, self.config)
             step = self.status()["history"] + 1
             # Surface seen by at least min(2, views) views, as the final mesh keeps.
             weight = min(self.config.reconstruct.min_views, step) - 0.5
             mesh = self._grid.extract_triangle_mesh(weight).to_legacy()
+            # Only the object: with the wide crop, other things nearby and specks come along.
+            if len(mesh.triangles):
+                labels, counts, _ = mesh.cluster_connected_triangles()
+                counts = np.asarray(counts)
+                mesh.remove_triangles_by_mask(counts[np.asarray(labels)] < self.config.reconstruct.min_component_fraction * counts.max())
+                mesh.remove_unreferenced_vertices()
             triangles = len(mesh.triangles)
             if triangles > STEP_TRIANGLES:
                 mesh = mesh.simplify_quadric_decimation(STEP_TRIANGLES)
@@ -315,7 +329,7 @@ class Live:
             points, colors, _ = back_project(view, POINT_STRIDE, self.config.camera.min_depth,
                                              self.config.camera.max_depth, view.T_world_cam,
                                              edge_grow=self.config.reconstruct.edge_grow)
-            near = obj.contains(points, POINT_MARGIN)
+            near = obj.contains(points, max(POINT_MARGIN, PREVIEW_MARGIN))
             cloud = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points[near]))
             cloud.colors = o3d.utility.Vector3dVector(colors[near])
             o3d.io.write_point_cloud(str(self.folder / step_name("points", step)), cloud, write_ascii=False)

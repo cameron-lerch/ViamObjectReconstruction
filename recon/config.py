@@ -313,7 +313,8 @@ class ReconstructConfig:
     # (screened Poisson with those priors; see bottom.py). "poisson": screened Poisson
     # through the measured surface alone, no priors. "height_field": solid from the table up
     # to the highest point seen in each 1.5mm square (voxel), for things lying flat such as
-    # a coiled cable, where Poisson balloons or bridges the strands. "none": the observed surface as is
+    # a coiled cable, where Poisson balloons or bridges the strands. "tube": a tube around the
+    # centerline seen from above, for cables (see tube.py). "none": the observed surface as is
     # (open where unseen). The outline is shrunk by footprint_shrink mm because edge
     # noise pads it.
     closing: str = "flat_bottom"
@@ -325,6 +326,16 @@ class ReconstructConfig:
     # Leave a hole in the outline open (no bottom across it) when some view saw the table
     # through it: the middle of a roll of tape, gaps in a coiled cable. Off: every hole is filled.
     see_through_holes: bool = True
+    # Leave out depth pixels lower than color_mask_height (mm) whose color matches the table
+    # around them (scene.not_table_pixels): table, or table blended with a thin strand's edge.
+    # For things lying on the table, such as a cable; it also drops the low part of an
+    # object colored like the table, so it is off unless chosen.
+    color_mask: bool = False
+    color_mask_height: float = 15.0
+    # closing = "tube": grid spacing (mm) for the centerline and the tube's surface, and a fixed
+    # radius (mm, from calipers), or 0 to measure it at each point from the data.
+    tube_cell: float = 1.0
+    tube_radius: float = 0.0
     # Wall-meets-table pixels flare outward; this lowest band of observed surface (mm)
     # is replaced by the straight-wall prior.
     base_band: float = 5.0

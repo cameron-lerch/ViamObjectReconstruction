@@ -29,8 +29,9 @@ from scipy.spatial.transform import Rotation
 from .bottom import boundary_edge_count, close_as_height_field, close_with_flat_bottom, enclosed_volume, table_seen
 from .config import Config, ReconstructConfig
 from .rgbd import OUTLIER_NEIGHBORS, OUTLIER_STD, View, back_project, incidence_deg, to_point_cloud
-from .scene import TOP_PERCENTILE, DetectedObject, TablePlane, min_area_rectangle
+from .scene import TOP_PERCENTILE, DetectedObject, TablePlane, min_area_rectangle, not_table_pixels
 from .transforms import make_transform, rotation_angle_deg
+from .tube import close_as_tube
 
 log = logging.getLogger(__name__)
 
@@ -240,6 +241,13 @@ def integrate(grid: o3d.t.geometry.VoxelBlockGrid, view: View, pose: np.ndarray,
     trunc_voxels = settings.sdf_trunc / settings.voxel
     points, _, pixels = back_project(view, 1, config.camera.min_depth, config.camera.max_depth, pose, edge_grow=config.reconstruct.edge_grow)
     keep = object_mask(points, obj, plane, settings)
+    if settings.color_mask:
+        # Low pixels with the table's color are table (or a blend of table and object at a
+        # thin strand's edge), not object: leave them out, so the fusion band can't smear
+        # them into sheets between a cable's strands.
+        heights = plane.height(points)
+        table_colored = ~not_table_pixels(view.color, pixels, heights)[pixels[:, 0], pixels[:, 1]]
+        keep &= ~(table_colored & (heights < settings.color_mask_height))
     if settings.max_incidence_deg < 90:
         keep &= incidence_deg(view.depth, view.intrinsics)[pixels[:, 0], pixels[:, 1]] <= settings.max_incidence_deg
     if not keep.any():
@@ -418,10 +426,13 @@ def build_mesh(views: list[View], poses: list[np.ndarray], planes: list[TablePla
     elif settings.closing == "height_field":
         seen = table_seen(views, poses, table, obj.center, obj.footprint_radius + 10.0) if settings.see_through_holes else None
         mesh = close_as_height_field(cloud, table, settings.voxel, seen)
+    elif settings.closing == "tube":
+        seen = table_seen(views, poses, table, obj.center, obj.footprint_radius + 10.0) if settings.see_through_holes else None
+        mesh = close_as_tube(cloud, table, settings.tube_cell, seen, settings.tube_radius)
     elif settings.closing == "none":
         mesh = observed
     else:
-        raise ValueError(f"Unknown closing {settings.closing!r}: flat_bottom, height_field, poisson or none")
+        raise ValueError(f"Unknown closing {settings.closing!r}: flat_bottom, height_field, tube, poisson or none")
     if settings.smooth_target in ("final", "both"):
         # The closed mesh is built from the fused points, not from the smoothed observed surface.
         mesh = smooth(mesh if settings.closing != "none" else o3d.geometry.TriangleMesh(mesh), settings)

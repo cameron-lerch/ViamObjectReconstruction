@@ -663,9 +663,8 @@ def progression_video_snapshot(session: Session, object_id: int, plane: TablePla
         raise RuntimeError(f"{len(views)} views but {len(poses)} saved poses; rebuild the mesh first (scan.py reconstruct)")
     obj = DetectedObject.from_dict(report["object"])
     planes = [local_table_plane(view, pose, obj, plane, config) for view, pose in zip(views, poses)]
-    named = f" ({obj.color_name})" if obj.color_name else ""
     path = progression_video(views, poses, planes, obj, config, session.object_dir(object_id) / "progression_vid.mp4",
-                             f"Object {object_id}{named}: the scan, view by view", azimuth=facing_the_arm(obj.center))
+                             "Object scan, view by view", azimuth=facing_the_arm(obj.center))
     log.info("  progression video: %s", path)
     return path
 

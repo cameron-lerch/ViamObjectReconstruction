@@ -33,3 +33,23 @@ def test_height_field_is_closed_and_keeps_a_gap():
     assert np.einsum("ij,ij->i", a, np.cross(b, c)).sum() > 0  # normals face out
     # The 22 x 7mm gap in the middle stays open: well under the full 30 x 15 x 8mm block.
     assert enclosed_volume(mesh) < 0.8 * 30 * 15 * 8
+
+
+def test_tube_follows_a_cable_with_its_radius():
+    # A cable 8mm thick lying in a U on the table, sampled on its top half: the tube
+    # closing gives one closed, round tube of about 4mm radius along it.
+    rng = np.random.default_rng(0)
+    s = np.linspace(0, 1, 4000)
+    path = np.where(s[:, None] < 0.5, np.column_stack([s * 200, np.zeros_like(s)]),
+                    np.column_stack([100 + 40 * np.sin((s - 0.5) * 2 * np.pi), 40 - 40 * np.cos((s - 0.5) * 2 * np.pi)]))
+    angle = rng.uniform(-np.pi / 2, np.pi / 2, len(s))
+    side = np.column_stack([-np.gradient(path[:, 1]), np.gradient(path[:, 0])])
+    side /= np.linalg.norm(side, axis=1, keepdims=True)
+    points = np.column_stack([path + side * 4.0 * np.sin(angle)[:, None], 4.0 + 4.0 * np.cos(angle)])
+    from recon.tube import close_as_tube
+    mesh = close_as_tube(o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points)), TABLE)
+    assert boundary_edge_count(mesh) == 0
+    labels, counts, _ = mesh.cluster_connected_triangles()
+    assert len(counts) == 1  # one piece
+    top = np.asarray(mesh.vertices)[:, 2].max()
+    assert 6.5 < top < 10.0  # about the cable's 8mm, not a slab or a sliver

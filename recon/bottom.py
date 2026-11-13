@@ -57,6 +57,9 @@ SCRAP_MARGIN = 3.0
 # Closing keeps every piece with at least this share of the largest piece's triangles
 # (a cable's plug end can close as its own piece); Poisson's small bubbles are dropped.
 KEEP_PIECE = 0.05
+# Holes in a top-down height map smaller than this (mm^2) are gaps in the sampling, not
+# gaps in the object (a roll of tape's hole, or the table between strands, is far bigger).
+SMALL_HOLE = 30.0
 # A closed mesh reaching further than this (mm) past the points it was fit to has
 # ballooned (Poisson does on thin slivers, such as 2 views of a pumpkin's top).
 BALLOON_MARGIN = 20.0
@@ -329,22 +332,17 @@ def close_with_flat_bottom(cloud: o3d.geometry.PointCloud, table: TablePlane, de
     return mesh
 
 
-def close_as_height_field(cloud: o3d.geometry.PointCloud, table: TablePlane, cell: float = 1.5,
-                          seen_table: np.ndarray | None = None) -> o3d.geometry.TriangleMesh:
-    ''' Closed mesh of a low object as solid from the table up to its measured top.
-
-    For things lying flat (a coiled cable): the underside is never seen, so filling
-    straight down is as good a guess as any, and unlike Poisson it can't balloon or
-    bridge the gaps between strands. The top is the highest fused point in each
-    `cell`-mm square; small gaps in the sampling are closed, while gaps where the
-    table was seen (`seen_table`, from `table_seen`) stay open. Built directly as
-    columns over the grid (top, walls, bottom), so it is closed by construction.
-    '''
+def top_down_heights(cloud: o3d.geometry.PointCloud, table: TablePlane, cell: float,
+                     seen_table: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    ''' A low object seen from above: (height of its top in each `cell`-mm square, which
+    squares it covers, the grid's origin in the table's 2D axes), or None if too little
+    was seen. Small gaps in the sampling are closed; gaps where the table was seen
+    (`seen_table`, from `table_seen`) stay open; specks and small pieces are dropped. '''
     points = np.asarray(cloud.points)
     heights = table.height(points)
     keep = heights > 0
     if keep.sum() < 50:
-        return o3d.geometry.TriangleMesh()
+        return None
     points, heights = points[keep], heights[keep]
     normal, u, v = _table_axes(table)
     flat = np.stack([points @ u, points @ v], axis=1)
@@ -361,11 +359,19 @@ def close_as_height_field(cloud: o3d.geometry.PointCloud, table: TablePlane, cel
         inside = np.all((seen >= 0) & (seen < shape), axis=1)
         table_cells = np.zeros(shape, dtype=bool)
         table_cells[seen[inside, 0], seen[inside, 1]] = True
-        filled &= ~(table_cells & ~occupied)  # a gap the camera saw table through stays a gap
+        # A gap the camera saw table through stays a gap, if no object point is within 2
+        # cells: the fused points are about a voxel apart, so many cells inside a strand
+        # have none of their own, and table seen at the strand's edge would cut it apart.
+        filled &= ~(table_cells & ~ndimage.binary_dilation(occupied, iterations=2))
     filled = ndimage.binary_opening(filled)
+    # Pinholes between sampled points (the fused points are a voxel apart) aren't gaps.
+    holes, count = ndimage.label(~filled)
+    if count:
+        area = ndimage.sum(np.ones(filled.shape), holes, index=np.arange(1, count + 1)) * cell * cell
+        filled |= np.isin(holes, np.flatnonzero(area < SMALL_HOLE) + 1)
     pieces, count = ndimage.label(filled)
     if count == 0:
-        return o3d.geometry.TriangleMesh()
+        return None
     sizes = ndimage.sum(filled, pieces, index=np.arange(1, count + 1))
     filled = np.isin(pieces, np.flatnonzero(sizes >= KEEP_PIECE * sizes.max()) + 1)
     # Heights: empty cells inside take their neighbors' highest, then a 3x3 median smooths.
@@ -373,6 +379,26 @@ def close_as_height_field(cloud: o3d.geometry.PointCloud, table: TablePlane, cel
     for _ in range(3):
         grid = np.where(filled & ~np.isfinite(top) & (grid == 0), ndimage.grey_dilation(grid, size=3), grid)
     grid = np.where(filled, ndimage.median_filter(grid, size=3), 0.0)
+    return grid, filled, low
+
+
+def close_as_height_field(cloud: o3d.geometry.PointCloud, table: TablePlane, cell: float = 1.5,
+                          seen_table: np.ndarray | None = None) -> o3d.geometry.TriangleMesh:
+    ''' Closed mesh of a low object as solid from the table up to its measured top.
+
+    For things lying flat (a coiled cable): the underside is never seen, so filling
+    straight down is as good a guess as any, and unlike Poisson it can't balloon or
+    bridge the gaps between strands. The top is the highest fused point in each
+    `cell`-mm square; small gaps in the sampling are closed, while gaps where the
+    table was seen (`seen_table`, from `table_seen`) stay open. Built directly as
+    columns over the grid (top, walls, bottom), so it is closed by construction.
+    '''
+    found = top_down_heights(cloud, table, cell, seen_table)
+    if found is None:
+        return o3d.geometry.TriangleMesh()
+    grid, filled, low = found
+    normal, u, v = _table_axes(table)
+    shape = grid.shape
     grid = np.maximum(grid, cell)  # every column has some height
 
     # Vertices at grid corners, top and bottom; a corner's top is its highest filled cell.
