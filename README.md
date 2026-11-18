@@ -441,7 +441,7 @@ The low rings are there because on rounded objects, like the pumpkin and the pri
 2. **Seen or not:** a direction counts as seen when the camera of at least one reachable view lies within 55° of it, measured from the point the views aim at. Beyond about 55°, the camera looks at that surface so obliquely that its readings get sparse and noisy. The 55° is a judgment call, not something I measured: depth noise stays roughly flat until the surface is tilted about 60° from facing the camera, then rises sharply ([Nguyen, Izadi & Lovell, 2012](https://computer.org/csdl/proceedings-article/3dimpvt/2012/4873a524/12OmNAlvHUP), measured on a Kinect), so I kept a little margin below that.
 3. **Coverage** is the share of the directions that are seen.
 
-If the reachable views cover less than 85% (`views.min_coverage`), the planner looks for a better place on the table to move the object to (relocation, which is off for now: [§13.8](#138-moving-objects-the-arm-cant-scan-all-the-way-around)). Coverage is only an estimate: it treats the object as if every surface faced straight out from its middle, so it ignores surface that the object hides from itself, like the inside of a bowl, and how far away each surface is. That's why I check the result afterward with the **measured share**: how much of the final mesh was actually measured ([§5.8](#measured-vs-filled-in-the-open-and-watertight-meshes)). On the full scans, coverage was 100% for every object, while 85-86% of each watertight mesh was measured.
+If the reachable views cover less than 85% (`views.min_coverage`), the planner looks for a better place on the table to move the object to (relocation, which is off for now: [§13.8](#138-moving-objects-the-arm-cant-scan-all-the-way-around)). Coverage is only an estimate: it treats the object as if every surface faced straight out from its middle, so it ignores surface that the object hides from itself, like the inside of a bowl, and how far away each surface is. So after the scan, I check the result with the **measured share**: how much of the final mesh was actually measured ([§5.8](#measured-vs-filled-in-the-open-and-watertight-meshes)). On the full scans, coverage was 100% for every object, while 85-86% of each watertight mesh was measured.
 
 ### 5.3 Stop-and-go capture
 
@@ -504,11 +504,11 @@ On the real cylinder's 25 views, the mount I had first entered in the Viam app t
 | Uncalibrated mount | 20mm (std 6.0mm) | 21mm (std 6.1mm) | 3.11mm median |
 | Calibrated mount | 4.4mm (std 1.0mm) | 5.0mm (std 1.1mm) | 0.52mm median |
 
-**What it can't see.** Anything that changes the scene's size equally from every direction (a depth bias, or a camera sitting a little farther along its own axis than calibrated) leaves all of the views in agreement, so this method can't detect it. That's why I also needed an absolute reference.
+**What it can't see.** Anything that changes the scene's size equally from every direction (a depth bias, or a camera sitting a little farther along its own axis than calibrated) leaves all of the views in agreement, so this method can't detect it. Catching that needs an absolute reference.
 
 #### Method 2: the ChArUco board
 
-The second method, `scan.py calibrate-board` (which `calibration.py` runs), uses a ChArUco board lying on the table: a checkerboard with an ArUco marker in each white square. Mine is a calib.io mat (12 × 9 squares of 15mm, 11mm markers, dictionary DICT_5X5). The markers make every corner identifiable even when only part of the board is visible, and the checker corners can be located to a fraction of a pixel. calib.io sells targets and calibration software, but this project only uses the printed mat and free, open-source tools: OpenCV for finding the corners, and my own solver.
+The second method, `scan.py calibrate-board` (which `calibration.py` runs), uses a ChArUco board lying on the table: a checkerboard with an ArUco marker in each white square. Mine is a calib.io mat (14 × 9 squares of 20mm, 15mm markers, dictionary DICT_5X5), set under `[board]` in `config.toml`; scans before 2026-11-17 used a smaller one (12 × 9 squares of 15mm, 11mm markers). The markers make every corner identifiable even when only part of the board is visible, and the checker corners can be located to a fraction of a pixel. calib.io sells targets and calibration software, but this project only uses the printed mat and free, open-source tools: OpenCV for finding the corners, and my own solver.
 
 **One view: the board's pose.** OpenCV finds the markers, then the checker corners between them, which gives pixel positions $x_k$ for corners whose positions $X_k$ on the board are known in mm. The board's pose relative to the camera ($R, t$) is the one that best reproduces them, which is the *Perspective-n-Point* problem:
 
@@ -627,7 +627,7 @@ So the best band depends on how noisy the object's readings are (mostly its mate
 - **But a narrow band measures less of the bowl, and the closing adds a feature.** At 2-3mm, only 79-82% of the final mesh is measured (91% at 6mm), and the flat-bottom closing fills the unmeasured part under the bowl with straight walls down to the table, which the real bowl doesn't have (the figure below). At 4.5mm, most of the gain remains (0.49mm), with only a small stub underneath.
 - **A band that's too wide thickens the wall.** At 9mm, the median error more than doubles (1.69mm), and the bowl comes out 6.9mm too wide.
 
-That's why I don't think one band suits every object. Once I've scanned more thin-walled objects, I plan to test choosing the band per object, from its wall thickness and how noisy its readings are.
+No single band suits every object. Once I've scanned more thin-walled objects, I plan to test choosing the band per object, from its wall thickness and how noisy its readings are.
 
 <p align="center">
   <img src="media/images/tsdf_truncation_orange_block.png" alt="The orange block's final mesh with truncation bands of 2, 3, 4.5, 6 and 9mm: all similar, slightly rougher at 2mm" width="1000">
@@ -733,7 +733,7 @@ These are the metrics I judge every mesh by. The first five need no ground truth
 |---|---|---|
 | **Roughness** | Median [root mean square](https://en.wikipedia.org/wiki/Root_mean_square) (RMS) distance of 3mm surface patches from their best-fit plane, on either mesh: the **measured surface** (`open_mesh.obj`) or the **final mesh** (`watertight_mesh.obj`, only where it lies on measured data, since the filled-in bottom and walls are smooth by construction). In the progression, it's measured only on the patch the first view saw, which every subset includes, so rows compare the same surface. | No |
 | **Deviation from final** | Distance from this subset's observed surface to the all-views watertight mesh (median and 90th percentile). | No |
-| **Completeness** | Share of the all-views observed surface that this subset saw (within 2mm). It's relative: the all-views scan is 100% by definition, and a region no view ever saw (the bottom) can't count against it. That's why the figures label each panel with the measured share instead. | No |
+| **Completeness** | Share of the all-views observed surface that this subset saw (within 2mm). It's relative: the all-views scan is 100% by definition, and a region no view ever saw (the bottom) can't count against it. The figures label each panel with the measured share instead. | No |
 | **Measured / filled in** | Share of the watertight mesh's surface that lies within 2mm of measured data (the measured share), and the rest, which the closing filled in ([§5.8](#measured-vs-filled-in-the-open-and-watertight-meshes)). | No |
 | **Volume** | Enclosed volume of the watertight mesh. | No |
 | **Size** | Width, length and height (or diameter) measured the way calipers would, against the average of many caliper measurements (`ground_truth.toml`, `scan.py compare`). | Yes (calipers) |
@@ -882,8 +882,8 @@ The column definitions are in [§6.1](#61-measuring-quality).
 
 **Making the mesh watertight** (how it's done: [§5.8](#58-closing-the-mesh)):
 
-- **The bottom is always filled in.** The camera can never see under the object. For this cylinder, the bottom and the lowest few millimeters of wall, which the closing replaces ([§5.8](#58-closing-the-mesh)), make up about 14% of the surface, which is why the 50-view scan tops out at 86% measured.
-- **With few views, the walls are mostly guessed.** The best single-view watertight mesh is closed and looks plausible at a glance (although its sides are square, not round), but 93% of it is assumption rather than data, and its volume (25.4cm³) is 53% below the 50-view result and 39% below the volume from the average caliper measurements (41.7cm³). The watertight meshes alone would overstate what a few views achieve, which is why I save `open_mesh.obj` next to every `watertight_mesh.obj`.
+- **The bottom is always filled in.** The camera can never see under the object. For this cylinder, the bottom and the lowest few millimeters of wall, which the closing replaces ([§5.8](#58-closing-the-mesh)), make up about 14% of the surface, so the 50-view scan tops out at 86% measured.
+- **With few views, the walls are mostly guessed.** The best single-view watertight mesh is closed and looks plausible at a glance (although its sides are square, not round), but 93% of it is assumption rather than data, and its volume (25.4cm³) is 53% below the 50-view result and 39% below the volume from the average caliper measurements (41.7cm³). The watertight meshes alone would overstate what a few views achieve, so I save `open_mesh.obj` next to every `watertight_mesh.obj`.
 
 ### 6.6 The real cylinder against calipers
 

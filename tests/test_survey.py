@@ -99,3 +99,26 @@ def test_starts_small_then_follows_the_table_to_its_edges(tmp_path):
 def test_wont_start_unless_the_camera_is_over_the_table(tmp_path, camera, why):
     with pytest.raises(pipeline.NeedsTable):
         survey(tmp_path, camera)
+
+
+def test_tries_halfway_when_every_neighbor_is_out_of_reach(tmp_path):
+    # 2026-11-17: the survey started over the calibration mat, and every neighbor one step
+    # away was out of reach or had the camera against the wrist, so it took one view and
+    # found nothing. Here only spots within 200mm of the start can be reached: the full
+    # steps (280mm) all fail, and the survey goes on from the halfway spots (140mm).
+    start = look_at([480, -150, TABLE_Z + 400], [480, -150, TABLE_Z])
+
+    class CloseReach(SimulatedArm):
+        async def plan_best_roll(self, frame, pose_for_roll, world_state=None, reference_deg=None):
+            pose = pose_for_roll(0.0)
+            if np.abs(pose[:2, 3] - start[:2, 3]).max() > 200:
+                return None, None, "collision: arm:wrist_link and camera-body-guard_origin"
+            return 0.0, pose, np.zeros(6)
+
+    scene = SyntheticScene([SceneObject(box(500, -150, (30, 30, 60), 10), (0.9, 0.4, 0.1))], table_box=TABLE)
+    arm = CloseReach(scene, start)
+    folders = asyncio.run(pipeline.survey_table(arm, Session(tmp_path / "session"), arm.config))
+    step = arm.config.workspace.survey_spacing
+    assert len(folders) >= 3  # not just the first view
+    later = [np.abs(pose[:2, 3] - start[:2, 3]).max() for pose in arm.moves[1:]]
+    assert any(abs(d - step / 2) < 5 for d in later)  # a halfway spot

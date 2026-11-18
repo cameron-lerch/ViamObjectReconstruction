@@ -349,9 +349,18 @@ class BoardConfig:
     views: int = 12
     # Frames per board view (the depth check uses their median).
     frames: int = 1
-    # Height above the board for the survey's head-on view: the whole 180 x 135mm
-    # board fits in the image's short side from about 250mm up.
+    # Height above the board for the survey's head-on view: the whole board fits in the
+    # image from about 250mm up (180 x 135mm), or 300mm (280 x 180mm).
     view_height: float = 330.0
+    # The ChArUco board itself, as printed on it. calib.io names a board rows x columns
+    # ("9x14"), so squares_x is the columns and squares_y the rows. These defaults are the
+    # first board (calib.io 9x12, 15mm checkers, 11mm markers), so runs saved before the
+    # board was set in config.toml still read correctly; config.toml sets the board in use.
+    squares_x: int = 12
+    squares_y: int = 9
+    square_mm: float = 15.0
+    marker_mm: float = 11.0
+    dictionary: str = "DICT_5X5_100"
 
 
 @dataclass

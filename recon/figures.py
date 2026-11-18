@@ -176,6 +176,9 @@ def progression_figure(folder: Path, svg: Path, title: str, counts: list[int],
 
 VIDEO_PANEL = 400  # pixels per panel in the progression video
 VIDEO_FPS = 4  # views per second
+VIDEO_SMOOTH = 3  # with the turning final mesh: frames per view (12 frames per second)
+TURN_SECONDS = 8.0  # about this long per full turn of the final mesh
+FINAL_TRIANGLES = 60000  # the final mesh is simplified to this many triangles to render each frame
 
 
 def object_photo(view, obj, size: int, pad: float = 0.6) -> np.ndarray:
@@ -205,14 +208,16 @@ def object_photo(view, obj, size: int, pad: float = 0.6) -> np.ndarray:
 
 
 def progression_video(views, poses, planes, obj, config, path: Path, title: str, elevation: float = 20.0,
-                      azimuth: float = -60.0) -> Path:
-    ''' A video of the scan building up, one frame per view in capture order, with three
+                      azimuth: float = -60.0, final_mesh: o3d.geometry.TriangleMesh | None = None) -> Path:
+    ''' A video of the scan building up, one step per view in capture order, with three
     panels side by side: that view's color image, the cumulative point cloud, and the open
-    mesh fused from every view so far (colored from the camera). Writes `path` (.mp4) and a
-    .gif beside it, which a README can show. '''
+    mesh fused from every view so far (colored from the camera). With `final_mesh`, a fourth
+    panel shows it turning smoothly, on its own clock: the video runs at VIDEO_SMOOTH frames
+    per view so the turn is smooth, while the first three panels still step at VIDEO_FPS
+    views per second. Writes `path` (.mp4) and a .gif beside it, which a README can show. '''
     import cv2
     from PIL import Image, ImageDraw, ImageFont
-    from .reconstruct import integrate, new_grid, object_mask
+    from .reconstruct import color_from, integrate, new_grid, object_mask
     from .rgbd import back_project, to_point_cloud
 
     per_view = []
@@ -232,8 +237,20 @@ def progression_video(views, poses, planes, obj, config, path: Path, title: str,
             return ImageFont.load_default()
 
     gap, top, under = 12, 58, 34
-    width, height = 3 * VIDEO_PANEL + 4 * gap, top + VIDEO_PANEL + under
-    grid, cloud, frames = new_grid(config), o3d.geometry.PointCloud(), []
+    count = 3 if final_mesh is None else 4
+    repeat = 1 if final_mesh is None else VIDEO_SMOOTH  # frames per view
+    width, height = count * VIDEO_PANEL + (count + 1) * gap, top + VIDEO_PANEL + under
+    if final_mesh is not None:
+        final_mesh = o3d.geometry.TriangleMesh(final_mesh)
+        if len(final_mesh.triangles) > FINAL_TRIANGLES:  # renders every frame: keep it quick
+            final_mesh = final_mesh.simplify_quadric_decimation(FINAL_TRIANGLES)
+        final_mesh.compute_vertex_normals()
+        # Whole turns over the whole video (views and the hold), about TURN_SECONDS each,
+        # so the GIF loops without a jump.
+        total = (len(views) + 2 * VIDEO_FPS) * repeat
+        turns = max(1, round(total / (VIDEO_FPS * repeat) / TURN_SECONDS))
+        step = 360.0 * turns / total
+    grid, cloud, steps = new_grid(config), o3d.geometry.PointCloud(), []
     for index, (view, pose, table, (points, colors)) in enumerate(zip(views, poses, planes, per_view), 1):
         integrate(grid, view, pose, obj, table, config)
         mesh = grid.extract_triangle_mesh(min(config.reconstruct.min_views, index) - 0.5).to_legacy()
@@ -244,6 +261,14 @@ def progression_video(views, poses, planes, obj, config, path: Path, title: str,
                                  colors=np.asarray(cloud.colors)), f"Cumulative point cloud ({index} view{'s' if index > 1 else ''})"),
                   (render(mesh, VIDEO_PANEL, elevation, azimuth, center, radius, use_colors=mesh.has_vertex_colors(),
                           wire_boundary=False), "Cumulative open mesh")]
+        steps.append(panels)
+    steps += [steps[-1]] * (2 * VIDEO_FPS)  # hold the finished mesh for 2s
+    if final_mesh is not None and (not final_mesh.has_vertex_colors() or np.asarray(final_mesh.vertex_colors).max() == 0):
+        # Meshes saved before watertight meshes were colored (they carry all-black vertex
+        # colors, or none): color it from this video's fusion.
+        final_mesh = color_from(final_mesh, grid.extract_point_cloud(min(config.reconstruct.min_views, len(views)) - 0.5).to_legacy())
+
+    def sheet_for(panels):
         sheet = Image.new("RGB", (width, height), "white")
         draw = ImageDraw.Draw(sheet)
         draw.text((width / 2, 22), title, fill=(31, 41, 51), font=font(24, True), anchor="mm")
@@ -251,15 +276,25 @@ def progression_video(views, poses, planes, obj, config, path: Path, title: str,
             x = gap + k * (VIDEO_PANEL + gap)
             sheet.paste(Image.fromarray(image), (x, top))
             draw.text((x + VIDEO_PANEL / 2, top + VIDEO_PANEL + 18), label, fill=(31, 41, 51), font=font(17, True), anchor="mm")
-        frames.append(sheet)
-    frames += [frames[-1]] * (2 * VIDEO_FPS)  # hold the finished mesh for 2s
+        return sheet
+
+    frames = []
+    for panels in steps:
+        for _ in range(repeat):
+            if final_mesh is not None:
+                turned = render(final_mesh, VIDEO_PANEL, elevation, azimuth + step * len(frames), center, radius,
+                                use_colors=final_mesh.has_vertex_colors(), wire_boundary=False)
+                frames.append(sheet_for(panels + [(turned, "Final watertight mesh")]))
+            else:
+                frames.append(sheet_for(panels))
     path = Path(path).with_suffix(".mp4")
-    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), VIDEO_FPS, (width, height))
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), VIDEO_FPS * repeat, (width, height))
     for frame in frames:
         writer.write(cv2.cvtColor(np.asarray(frame), cv2.COLOR_RGB2BGR))
     writer.release()
     small = [frame.resize((width // 2, height // 2), Image.LANCZOS) for frame in frames]
-    small[0].save(path.with_suffix(".gif"), save_all=True, append_images=small[1:], duration=int(1000 / VIDEO_FPS), loop=0)
+    small[0].save(path.with_suffix(".gif"), save_all=True, append_images=small[1:],
+                  duration=int(1000 / (VIDEO_FPS * repeat)), loop=0)
     return path
 
 

@@ -41,10 +41,21 @@ OPENCV_METHODS = ["tsai", "park", "horaud", "andreff", "daniilidis"]
 METHODS = ["ours", *OPENCV_METHODS]
 
 
+def saved_board(folder: Path) -> BoardSpec:
+    ''' The board a saved run used: from its session.json's config ([board]), or the first
+    board for runs saved before the board was set in config.toml. '''
+    for path in (folder / "session.json", folder.parent / "session.json"):
+        if path.exists():
+            board = json.loads(path.read_text()).get("config", {}).get("board", {})
+            fields = {k: board[k] for k in ("squares_x", "squares_y", "square_mm", "marker_mm", "dictionary") if k in board}
+            return BoardSpec(**fields)
+    return BoardSpec()
+
+
 def load_board_views(folder: Path, spec: BoardSpec | None = None):
     ''' Arm end poses, board detections, intrinsics and the mount in use, from a saved
     board run (data/board-*/board/view_*). Views where the board wasn't found are skipped. '''
-    spec = spec or BoardSpec()
+    spec = spec or saved_board(Path(folder))
     ends, found, mounts, K = [], [], [], None
     for record in sorted(Path(folder).glob("view_*/view.json")):
         view = load_view(record.parent)

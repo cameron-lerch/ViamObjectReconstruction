@@ -436,7 +436,28 @@ def build_mesh(views: list[View], poses: list[np.ndarray], planes: list[TablePla
     if settings.smooth_target in ("final", "both"):
         # The closed mesh is built from the fused points, not from the smoothed observed surface.
         mesh = smooth(mesh if settings.closing != "none" else o3d.geometry.TriangleMesh(mesh), settings)
+    if settings.closing != "none":
+        mesh = color_from(mesh, cloud)
     return FusedMesh(observed, mesh, cloud, table)
+
+
+COLOR_REACH = 3.0  # a watertight mesh vertex takes the color of a measured point within this distance (mm)
+FILLED_COLOR = (0.78, 0.78, 0.78)  # ...and surface filled in where nothing was measured is light gray
+
+
+def color_from(mesh: o3d.geometry.TriangleMesh, cloud: o3d.geometry.PointCloud,
+               reach: float = COLOR_REACH) -> o3d.geometry.TriangleMesh:
+    ''' Color a closed mesh from the fused (colored) points: each vertex takes its nearest
+    measured point's color, within `reach` mm; surface the closing filled in where nothing
+    was measured (the bottom, unseen walls) is light gray. '''
+    if len(mesh.vertices) == 0 or not cloud.has_colors() or len(cloud.points) == 0:
+        return mesh
+    distance, nearest = cKDTree(np.asarray(cloud.points)).query(np.asarray(mesh.vertices), distance_upper_bound=reach)
+    colors = np.tile(np.array(FILLED_COLOR), (len(mesh.vertices), 1))
+    seen = np.isfinite(distance)
+    colors[seen] = np.asarray(cloud.colors)[nearest[seen]]
+    mesh.vertex_colors = o3d.utility.Vector3dVector(colors)
+    return mesh
 
 
 def _main_cluster(points: np.ndarray, obj: DetectedObject, margin: float, settings: ReconstructConfig) -> np.ndarray | None:

@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import open3d as o3d
 from scipy.spatial.transform import Rotation
 
 from .board import BoardSpec, depth_model, detect, hand_eye, locate_flat
@@ -18,7 +19,7 @@ from .config import Config
 from .figures import doubling_counts, facing_the_arm, progression_counts, progression_figure, progression_video
 from .planner import ScanPlan, plan_scan, spread_views
 from .progression import progression
-from .reconstruct import local_table_plane, reconstruct, save_reconstruction, views_seeing
+from .reconstruct import WATERTIGHT_MESH, local_table_plane, reconstruct, save_reconstruction, views_seeing
 from .relocate import PickAndPlace, choose_station, execute_pick_and_place, plan_pick_and_place
 from .rgbd import back_project, load_view, load_views, save_frames, save_view
 from .robot import MissedTarget, MoveDeclined, Robot, RobotUnresponsive, ask_operator
@@ -111,7 +112,7 @@ MIN_LOOK_DOWN = 0.5  # the camera must point at least 30deg below horizontal to 
 TABLE_BAND_MM = 10.0  # points this close to a view's table plane count as table, for the table area
 
 
-def survey_lattice_neighbors(key: tuple[int, int]) -> list[tuple[int, int]]:
+def survey_lattice_neighbors(key: tuple[float, float]) -> list[tuple[float, float]]:
     return [(key[0] + di, key[1] + dj) for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1))]
 
 
@@ -125,8 +126,12 @@ async def survey_table(robot: Robot, session: Session, config: Config) -> list:
        to `survey_height` above that table, over the same spot.
     3. Then outward on a lattice `survey_spacing` apart, starting there: the camera goes on
        to a neighboring position only if its last picture still shows table on that side, so
-       it stops at the table's edges; positions the planner can't reach (out of reach, or
-       blocked by Viam's obstacles, like walls) are skipped. At most `survey_max_views`.
+       it stops at the table's edges. A position the planner can't reach (out of reach,
+       blocked by Viam's obstacles like walls, or the camera against the arm's wrist) is
+       tried again halfway toward it, and the lattice goes on from there; only if that
+       fails too is it skipped. The lattice starts over the calibration mat, so without
+       the halfway tries, a mat in an awkward spot left every neighbor out of reach
+       (2026-11-17: one survey view, no objects). At most `survey_max_views`.
     With `[workspace] survey_positions` set, the camera looks down from those instead.
     '''
     workspace = config.workspace
@@ -196,7 +201,16 @@ async def survey_table(robot: Robot, session: Session, config: Config) -> list:
         frontier.discard(key)
         visited.add(key)
         if not await move_camera_looking_down(robot, *position(key)):
-            continue
+            # Halfway toward it, from where the camera is (a neighbor one step away).
+            gap = np.subtract(key, here)
+            half = tuple(float(v) for v in np.add(here, gap / 2))
+            if np.abs(gap).sum() != 1 or half in visited or np.hypot(*position(half)[:2]) < workspace.base_clearance:
+                continue
+            visited.add(half)
+            log.info("  trying halfway instead: (%.0f, %.0f)", *position(half)[:2])
+            if not await move_camera_looking_down(robot, *position(half)):
+                continue
+            key = half
         here = key
         points = scene_points([await look({"grid": list(key)})], config)
         extend(key, points)
@@ -292,12 +306,13 @@ async def survey(robot: Robot, session: Session, config: Config, execute: bool) 
         for thing in clutter:
             log.info("  (%.0f, %.0f), %.0f x %.0f x %.0fmm", *thing.center[:2], *thing.size)
 
-    board = find_board(folders, BoardSpec())
+    spec = BoardSpec.from_config(config.board)
+    board = find_board(folders, spec)
     if board is None:
         log.info("No calibration board in the survey views")
     else:
         T_world_board, found, tilt = board
-        center = (T_world_board @ np.append(BoardSpec().center, 1.0))[:3]
+        center = (T_world_board @ np.append(spec.center, 1.0))[:3]
         log.info("Calibration board: center (%.0f, %.0f, %.0f), %d corners seen, %.1fdeg from level",
                  *center, len(found.ids), tilt)
         record = {"pose": T_world_board.tolist(), "center": center.tolist(), "survey_tilt_deg": tilt}
@@ -334,7 +349,7 @@ async def view_board_head_on(robot: Robot, session: Session, config: Config, cen
     ''' Look straight down at the board's center so all of it is in view, and check it. If
     the arm can't reach over the center, look from as close to it as it can, sliding toward
     the arm's base. Where the camera ends up becomes the home position (save_home). '''
-    spec = BoardSpec()
+    spec = BoardSpec.from_config(config.board)
     toward_base = -center[:2] / np.linalg.norm(center[:2])
     height = center[2] + config.board.view_height
     for slide in np.arange(0.0, HOME_SLIDE_MAX_MM + 1, HOME_SLIDE_MM):
@@ -663,8 +678,13 @@ def progression_video_snapshot(session: Session, object_id: int, plane: TablePla
         raise RuntimeError(f"{len(views)} views but {len(poses)} saved poses; rebuild the mesh first (scan.py reconstruct)")
     obj = DetectedObject.from_dict(report["object"])
     planes = [local_table_plane(view, pose, obj, plane, config) for view, pose in zip(views, poses)]
+    # The finished watertight mesh turns in a fourth panel, when there is one.
+    final_path = folder / f"{WATERTIGHT_MESH}.ply"
+    final = o3d.io.read_triangle_mesh(str(final_path)) if final_path.exists() else None
+    if final is not None and len(final.triangles) == 0:
+        final = None
     path = progression_video(views, poses, planes, obj, config, session.object_dir(object_id) / "progression_vid.mp4",
-                             "Object scan, view by view", azimuth=facing_the_arm(obj.center))
+                             "Object scan, view by view", azimuth=facing_the_arm(obj.center), final_mesh=final)
     log.info("  progression video: %s", path)
     return path
 
@@ -722,7 +742,7 @@ async def board_calibration(robot: Robot, session: Session, config: Config, exec
     with `execute` captures them and solves for the camera mount and the depth
     sensor's error.
     '''
-    spec = spec or BoardSpec()
+    spec = spec or BoardSpec.from_config(config.board)
     found_from_here = known_center is None
     if found_from_here:
         known_center = await search_for_board(robot, session, config, spec, execute)
@@ -793,7 +813,7 @@ async def board_calibration(robot: Robot, session: Session, config: Config, exec
                  len(found.ids), found.reprojection_px, tilt, *center)
 
     camera = config.machine.camera
-    # Candidate board views: 3 distances that keep the 180 x 135mm board well inside the
+    # Candidate board views: 3 distances that keep the board (up to 280 x 180mm) well inside the
     # image, steep enough elevations that every corner is seen, every 60deg around.
     # Judgment; the hand-eye solve wants varied rotations more than many views.
     poses = []

@@ -30,6 +30,7 @@ from itertools import product
 import numpy as np
 from scipy.spatial import cKDTree
 
+from .board import BoardSpec
 from .config import Config
 from .robot import MoveDeclined, Robot
 from .scene import DetectedObject, TablePlane
@@ -48,7 +49,7 @@ STEP, MAX_STEP = 1.0, 5.0  # Enter steps 1mm; typing a number steps that far (up
 FLOOR = 10.0  # never go more than this past the expected contact (40mm when only the model is known)
 CLEARANCE = 120.0  # from a spot to anything standing on the table (the open claws are 170mm wide)
 VICINITY = 150.0  # ...and at most this much farther from the nearest scan target: the table that matters is near them
-BOARD_CLEARANCE = 150.0  # from a spot to the calibration board's center (the board is 180 x 135mm)
+BOARD_CLEARANCE = 40.0  # from a spot to the calibration board's edge (its corners, measured from its center)
 
 
 async def modeled_reach(robot: Robot) -> float:
@@ -103,6 +104,7 @@ def candidate_spots(obstacles: list[DetectedObject], plane: TablePlane, config: 
     and, given `targets`, near one of them (within `vicinity` beyond the clearance).
     `on_table` (from `bare_table`) checks the survey really saw table there. '''
     workspace = config.workspace
+    board_reach = float(np.hypot(*BoardSpec.from_config(config.board).size_mm)) / 2  # center to corner
     (x0, x1), (y0, y1) = workspace.x_range, workspace.y_range
     xs, ys = np.meshgrid(np.arange(x0, x1, spacing), np.arange(y0, y1, spacing))
     spots = []
@@ -113,7 +115,7 @@ def candidate_spots(obstacles: list[DetectedObject], plane: TablePlane, config: 
             continue
         if targets and min(np.linalg.norm(xy - o.center[:2]) - o.footprint_radius for o in targets) > clearance + vicinity:
             continue
-        if board_center is not None and np.linalg.norm(xy - np.asarray(board_center)[:2]) < BOARD_CLEARANCE:
+        if board_center is not None and np.linalg.norm(xy - np.asarray(board_center)[:2]) < board_reach + BOARD_CLEARANCE:
             continue
         if on_table is not None and not on_table(xy):
             continue

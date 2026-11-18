@@ -10,7 +10,8 @@ checks the scan data can't do on its own:
 - depth accuracy: what the depth sensor reads at each board corner versus where
   the image says the corner is, fit as an offset plus a scale.
 
-Default board: calib.io 9 x 12, 15mm checkers, 11mm markers, ArUco DICT_5X5
+The board in use is set under [board] in config.toml (BoardSpec.from_config); the
+default here is the first board: calib.io 9 x 12, 15mm checkers, 11mm markers, ArUco DICT_5X5
 (12 squares across, 9 down; marker ids up to 53, so the 100-marker dictionary).
 '''
 
@@ -27,13 +28,23 @@ from .transforms import make_transform
 
 @dataclass
 class BoardSpec:
-    # The calib.io ChArUco board on armfarm14's table, as printed on it: 12 x 9 squares
-    # of 15mm with 11mm ArUco markers from the DICT_5X5 dictionary.
+    # A ChArUco board, as printed on it. The defaults are the first calib.io board (12 x 9
+    # squares of 15mm with 11mm ArUco markers, DICT_5X5); the one in use comes from
+    # [board] in config.toml (from_config).
     squares_x: int = 12
     squares_y: int = 9
     square_mm: float = 15.0
     marker_mm: float = 11.0
     dictionary: str = "DICT_5X5_100"
+
+    @classmethod
+    def from_config(cls, board) -> "BoardSpec":
+        ''' The board set in config.toml ([board], a BoardConfig). '''
+        return cls(board.squares_x, board.squares_y, board.square_mm, board.marker_mm, board.dictionary)
+
+    @property
+    def size_mm(self) -> tuple[float, float]:
+        return self.squares_x * self.square_mm, self.squares_y * self.square_mm
 
     def board(self) -> cv2.aruco.CharucoBoard:
         dictionary = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, self.dictionary))
